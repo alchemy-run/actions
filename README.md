@@ -11,8 +11,33 @@ Shared CI/CD workflows and scripts for the Alchemy projects:
 ### `release.yml`
 
 Bump versions across a set of publishable workspace packages, commit + tag,
-publish to npm with OIDC trusted publishing, then cut a GitHub Release and
-notify Discord.
+publish to npm with OIDC trusted publishing **in dependency-graph order
+(waves)**, then cut a GitHub Release and notify Discord.
+
+Publish order is derived automatically from each `package.json`'s
+`workspace:*` deps that point at other publishables. A wave is the set of
+packages that don't depend on each other — those publish in parallel.
+Wave N+1 starts after every wave ≤ N has succeeded. The array order in
+`packages:` doesn't matter.
+
+For `alchemy-effect` (`alchemy` ← `better-auth`, `pr-package`) the DAG
+resolves to:
+
+```
+wave 1: alchemy
+wave 2: @alchemy.run/better-auth, @alchemy.run/pr-package   (parallel)
+```
+
+For `distilled` (everything depends on `@distilled.cloud/core`):
+
+```
+wave 1: @distilled.cloud/core
+wave 2: @distilled.cloud/aws, …/cloudflare, …/neon, …       (parallel)
+```
+
+The workflow pre-declares five wave jobs and skips the empty ones —
+deeper DAGs require bumping `MAX_WAVES` in `compute-waves.ts` and adding
+matching jobs.
 
 Channels:
 

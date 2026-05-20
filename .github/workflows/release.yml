@@ -2,7 +2,12 @@ name: Release NPM Package (reusable)
 
 # Reusable workflow that bumps versions across a set of publishable
 # workspace packages, commits + tags, publishes each to npm with OIDC
-# trusted publishing, then cuts a GitHub Release and notifies Discord.
+# trusted publishing in dependency-graph order (waves), then cuts a
+# GitHub Release and notifies Discord.
+#
+# Publish order is derived automatically from each package.json's
+# `workspace:*` deps to other publishables, so consumers don't have to
+# declare it. See compute-waves.ts.
 #
 # See README.md in this repo for the calling-side example.
 
@@ -34,10 +39,8 @@ on:
       packages:
         description: >-
           JSON array of `{ "dir": "...", "name": "..." }` objects, one per
-          publishable workspace package. Order matters: the first package
-          publishes first; the rest publish after it succeeds. (Layer
-          packages typically depend on the first package and need it on
-          npm first.)
+          publishable workspace package. Publish order is computed from
+          each package.json's workspace deps — array order doesn't matter.
         required: true
         type: string
       build-command:
@@ -68,7 +71,10 @@ env:
   ALCHEMY_CURRENT_VERSION: ${{ inputs.current-version }}
 
 jobs:
-  # ── Step 1: Compute the next version and stage the bump in-memory. ──
+  # ── Step 1: Compute the next version, the publish DAG, and stage the
+  # bump in-memory. No git commit: a failed publish leaves no orphan
+  # commit behind. The staged files ride to the publish jobs as an
+  # artifact.
   bump:
     runs-on: ubuntu-latest
     outputs:
@@ -77,7 +83,11 @@ jobs:
       sha: ${{ steps.sha.outputs.sha }}
       dirs: ${{ steps.parse.outputs.dirs }}
       names: ${{ steps.parse.outputs.names }}
-      artifact-paths: ${{ steps.parse.outputs.artifact-paths }}
+      wave1: ${{ steps.waves.outputs.wave1 }}
+      wave2: ${{ steps.waves.outputs.wave2 }}
+      wave3: ${{ steps.waves.outputs.wave3 }}
+      wave4: ${{ steps.waves.outputs.wave4 }}
+      wave5: ${{ steps.waves.outputs.wave5 }}
     env:
       CHANNEL: ${{ inputs.channel }}
       SPEC: ${{ inputs.spec }}
@@ -90,17 +100,9 @@ jobs:
           esac
           case "$CHANNEL" in
             tag)
-              if [ -z "$SPEC" ]; then
-                echo "::error::'tag' channel requires an explicit version in 'spec'"
-                exit 1
-              fi
-              ;;
+              [ -n "$SPEC" ] || { echo "::error::'tag' channel requires an explicit version in 'spec'"; exit 1; } ;;
             release)
-              if [ -z "$SPEC" ]; then
-                echo "::error::'release' channel requires a 'spec' (patch|minor|major|x.y.z)"
-                exit 1
-              fi
-              ;;
+              [ -n "$SPEC" ] || { echo "::error::'release' channel requires a 'spec' (patch|minor|major|x.y.z)"; exit 1; } ;;
           esac
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -124,22 +126,9 @@ jobs:
           set -euo pipefail
           DIRS=$(printf '%s' "$PACKAGES_JSON" | jq -c '[.[].dir]')
           NAMES=$(printf '%s' "$PACKAGES_JSON" | jq -c '[.[].name]')
-          # Artifact upload paths: each pkg's package.json, lib, bin (if present)
-          # plus the workspace lockfile.
-          PATHS=$(printf '%s' "$PACKAGES_JSON" | jq -r '
-            [.[].dir] as $dirs
-            | ($dirs | map("\(.)/package.json")
-               + ($dirs | map("\(.)/lib"))
-               + ($dirs | map("\(.)/bin")))
-            | .[]')
-          PATHS="${PATHS}
-          bun.lock"
           {
             echo "dirs=$DIRS"
             echo "names=$NAMES"
-            echo "artifact-paths<<EOF"
-            echo "$PATHS"
-            echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
       - uses: ./.alchemy-actions/actions/setup
@@ -165,18 +154,51 @@ jobs:
           echo "Resolved version: $VERSION (channel: $CHANNEL)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      # Compute waves AFTER bump so the package.json reads see the
+      # freshly-written workspace versions (not strictly required for the
+      # DAG itself, but keeps the script self-consistent if it ever
+      # starts looking at versions).
+      - id: waves
+        env:
+          ALCHEMY_PUBLISHABLE_DIRS: ${{ steps.parse.outputs.dirs }}
+          ALCHEMY_PUBLISHABLE_NAMES: ${{ steps.parse.outputs.names }}
+        run: |
+          set -euo pipefail
+          out=$(bun "$ACTIONS_DIR/scripts/release/compute-waves.ts")
+          echo "Computed publish DAG:"
+          echo "$out" | grep '^wave[1-5]='
+          echo "$out" >> "$GITHUB_OUTPUT"
+
       - name: Build packages
         run: ${{ inputs.build-command }}
+
+      - id: artifact-paths
+        env:
+          DIRS: ${{ steps.parse.outputs.dirs }}
+        run: |
+          set -euo pipefail
+          PATHS=$(printf '%s' "$DIRS" | jq -r '
+            .[] as $d
+            | "\($d)/package.json", "\($d)/lib", "\($d)/bin"')
+          PATHS="${PATHS}
+          bun.lock"
+          {
+            echo "paths<<EOF"
+            echo "$PATHS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bump-files
-          path: ${{ steps.parse.outputs.artifact-paths }}
+          path: ${{ steps.artifact-paths.outputs.paths }}
           if-no-files-found: warn
           retention-days: 7
           include-hidden-files: true
 
   # ── Step 2: Commit (bump + changelog) and tag BEFORE publishing. ──
+  # Committing first means the publishable source of truth is the tagged
+  # commit; publish jobs check it out by SHA. Skipped for `tag` channel.
   commit-and-tag:
     needs: bump
     if: inputs.channel != 'tag'
@@ -225,8 +247,6 @@ jobs:
         env:
           VERSION: ${{ needs.bump.outputs.version }}
           DIRS: ${{ needs.bump.outputs.dirs }}
-          ALCHEMY_PUBLISHABLE_DIRS: ${{ needs.bump.outputs.dirs }}
-          ALCHEMY_PUBLISHABLE_NAMES: ${{ needs.bump.outputs.names }}
         run: |
           set -euo pipefail
           TAG="v${VERSION}"
@@ -241,7 +261,6 @@ jobs:
 
           bun "$ACTIONS_DIR/scripts/release/release-notes.ts" "${TAG}"
 
-          # Stage every bumped package.json + lockfile + new changelog entry.
           mapfile -t PKG_JSONS < <(printf '%s' "$DIRS" | jq -r '.[] | "\(.)/package.json"')
           git add "${PKG_JSONS[@]}" bun.lock CHANGELOG.md
 
@@ -265,66 +284,197 @@ jobs:
           SHA=$(git rev-parse HEAD)
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
 
-  # ── Step 3: Build and publish each package sequentially. ──
-  # The first package publishes first (layer packages typically depend on
-  # it being on npm before they resolve). Subsequent packages publish in
-  # array order. `publish-package.ts` is idempotent, so re-running this
-  # job after a partial failure is safe.
-  publish:
+  # ── Step 3: Publish in waves. Each wave is a matrix of packages that
+  # publish in parallel. Wave N is gated on wave N-1 succeeding (or
+  # skipping). GitHub Actions can't dynamically generate jobs, so we
+  # pre-declare 5 waves and skip ones with empty matrices. Bump
+  # MAX_WAVES in compute-waves.ts (and add jobs here) if 5 isn't enough.
+  publish-wave-1:
     needs: [bump, commit-and-tag]
     if: >-
       always() && needs.bump.result == 'success' &&
       (needs.commit-and-tag.result == 'success' ||
-       needs.commit-and-tag.result == 'skipped')
+       needs.commit-and-tag.result == 'skipped') &&
+      needs.bump.outputs.wave1 != '[]'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.bump.outputs.wave1) }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.commit-and-tag.outputs.sha || needs.bump.outputs.sha }}
-
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: alchemy-run/actions
           ref: ${{ inputs.actions-ref }}
           path: ${{ env.ACTIONS_DIR }}
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: ./.alchemy-actions/actions/publish
         with:
-          name: bump-files
-
-      - uses: ./.alchemy-actions/actions/setup
-        with:
+          ref: ${{ needs.commit-and-tag.outputs.sha || needs.bump.outputs.sha }}
+          actions-ref: ${{ inputs.actions-ref }}
+          dir: ${{ matrix.package.dir }}
+          channel: ${{ needs.bump.outputs.channel }}
+          dirs-json: ${{ needs.bump.outputs.dirs }}
+          names-json: ${{ needs.bump.outputs.names }}
           node-version: ${{ inputs.node-version }}
-          registry-url: https://registry.npmjs.org/
 
-      - name: Upgrade npm for OIDC trusted publishing
-        run: |
-          npm install -g npm@latest && npm --version
-          sed -i '/always-auth/d' ~/.npmrc 2>/dev/null || true
+  publish-wave-2:
+    needs: [bump, commit-and-tag, publish-wave-1]
+    if: >-
+      always() && needs.bump.result == 'success' &&
+      (needs.commit-and-tag.result == 'success' ||
+       needs.commit-and-tag.result == 'skipped') &&
+      (needs.publish-wave-1.result == 'success' ||
+       needs.publish-wave-1.result == 'skipped') &&
+      needs.bump.outputs.wave2 != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.bump.outputs.wave2) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+      - uses: ./.alchemy-actions/actions/publish
+        with:
+          ref: ${{ needs.commit-and-tag.outputs.sha || needs.bump.outputs.sha }}
+          actions-ref: ${{ inputs.actions-ref }}
+          dir: ${{ matrix.package.dir }}
+          channel: ${{ needs.bump.outputs.channel }}
+          dirs-json: ${{ needs.bump.outputs.dirs }}
+          names-json: ${{ needs.bump.outputs.names }}
+          node-version: ${{ inputs.node-version }}
 
-      - name: Install actions deps
-        working-directory: ${{ env.ACTIONS_DIR }}
-        run: bun install
+  publish-wave-3:
+    needs: [bump, commit-and-tag, publish-wave-1, publish-wave-2]
+    if: >-
+      always() && needs.bump.result == 'success' &&
+      (needs.commit-and-tag.result == 'success' ||
+       needs.commit-and-tag.result == 'skipped') &&
+      (needs.publish-wave-1.result == 'success' ||
+       needs.publish-wave-1.result == 'skipped') &&
+      (needs.publish-wave-2.result == 'success' ||
+       needs.publish-wave-2.result == 'skipped') &&
+      needs.bump.outputs.wave3 != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.bump.outputs.wave3) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+      - uses: ./.alchemy-actions/actions/publish
+        with:
+          ref: ${{ needs.commit-and-tag.outputs.sha || needs.bump.outputs.sha }}
+          actions-ref: ${{ inputs.actions-ref }}
+          dir: ${{ matrix.package.dir }}
+          channel: ${{ needs.bump.outputs.channel }}
+          dirs-json: ${{ needs.bump.outputs.dirs }}
+          names-json: ${{ needs.bump.outputs.names }}
+          node-version: ${{ inputs.node-version }}
 
-      - name: Publish packages
-        env:
-          CHANNEL: ${{ needs.bump.outputs.channel }}
-          DIRS: ${{ needs.bump.outputs.dirs }}
-          ALCHEMY_PUBLISHABLE_DIRS: ${{ needs.bump.outputs.dirs }}
-          ALCHEMY_PUBLISHABLE_NAMES: ${{ needs.bump.outputs.names }}
-        run: |
-          set -euo pipefail
-          mapfile -t DIRS_ARR < <(printf '%s' "$DIRS" | jq -r '.[]')
-          for dir in "${DIRS_ARR[@]}"; do
-            echo "::group::Publish $dir"
-            bun "$ACTIONS_DIR/scripts/release/publish-package.ts" "$dir" "$CHANNEL"
-            echo "::endgroup::"
-          done
+  publish-wave-4:
+    needs: [bump, commit-and-tag, publish-wave-1, publish-wave-2, publish-wave-3]
+    if: >-
+      always() && needs.bump.result == 'success' &&
+      (needs.commit-and-tag.result == 'success' ||
+       needs.commit-and-tag.result == 'skipped') &&
+      (needs.publish-wave-1.result == 'success' ||
+       needs.publish-wave-1.result == 'skipped') &&
+      (needs.publish-wave-2.result == 'success' ||
+       needs.publish-wave-2.result == 'skipped') &&
+      (needs.publish-wave-3.result == 'success' ||
+       needs.publish-wave-3.result == 'skipped') &&
+      needs.bump.outputs.wave4 != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.bump.outputs.wave4) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+      - uses: ./.alchemy-actions/actions/publish
+        with:
+          ref: ${{ needs.commit-and-tag.outputs.sha || needs.bump.outputs.sha }}
+          actions-ref: ${{ inputs.actions-ref }}
+          dir: ${{ matrix.package.dir }}
+          channel: ${{ needs.bump.outputs.channel }}
+          dirs-json: ${{ needs.bump.outputs.dirs }}
+          names-json: ${{ needs.bump.outputs.names }}
+          node-version: ${{ inputs.node-version }}
+
+  publish-wave-5:
+    needs: [bump, commit-and-tag, publish-wave-1, publish-wave-2, publish-wave-3, publish-wave-4]
+    if: >-
+      always() && needs.bump.result == 'success' &&
+      (needs.commit-and-tag.result == 'success' ||
+       needs.commit-and-tag.result == 'skipped') &&
+      (needs.publish-wave-1.result == 'success' ||
+       needs.publish-wave-1.result == 'skipped') &&
+      (needs.publish-wave-2.result == 'success' ||
+       needs.publish-wave-2.result == 'skipped') &&
+      (needs.publish-wave-3.result == 'success' ||
+       needs.publish-wave-3.result == 'skipped') &&
+      (needs.publish-wave-4.result == 'success' ||
+       needs.publish-wave-4.result == 'skipped') &&
+      needs.bump.outputs.wave5 != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.bump.outputs.wave5) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+      - uses: ./.alchemy-actions/actions/publish
+        with:
+          ref: ${{ needs.commit-and-tag.outputs.sha || needs.bump.outputs.sha }}
+          actions-ref: ${{ inputs.actions-ref }}
+          dir: ${{ matrix.package.dir }}
+          channel: ${{ needs.bump.outputs.channel }}
+          dirs-json: ${{ needs.bump.outputs.dirs }}
+          names-json: ${{ needs.bump.outputs.names }}
+          node-version: ${{ inputs.node-version }}
 
   # ── Step 4: Create GitHub Release and notify Discord. ──
+  # Runs only when every non-empty publish wave succeeded.
   finalize:
-    needs: [bump, commit-and-tag, publish]
-    if: inputs.channel != 'tag' && needs.publish.result == 'success'
+    needs:
+      [
+        bump,
+        commit-and-tag,
+        publish-wave-1,
+        publish-wave-2,
+        publish-wave-3,
+        publish-wave-4,
+        publish-wave-5,
+      ]
+    if: >-
+      always() && inputs.channel != 'tag' &&
+      needs.commit-and-tag.result == 'success' &&
+      (needs.publish-wave-1.result == 'success' ||
+       needs.publish-wave-1.result == 'skipped') &&
+      (needs.publish-wave-2.result == 'success' ||
+       needs.publish-wave-2.result == 'skipped') &&
+      (needs.publish-wave-3.result == 'success' ||
+       needs.publish-wave-3.result == 'skipped') &&
+      (needs.publish-wave-4.result == 'success' ||
+       needs.publish-wave-4.result == 'skipped') &&
+      (needs.publish-wave-5.result == 'success' ||
+       needs.publish-wave-5.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
