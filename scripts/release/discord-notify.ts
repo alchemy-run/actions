@@ -4,6 +4,16 @@
  * read verbatim from the CHANGELOG.md entry the release-notes step just
  * wrote, so Discord matches the GitHub Release copy exactly.
  *
+ * The webhook posts under `<RepoName> Releases` (e.g. "Alchemy-Effect
+ * Releases", "Distilled Releases"). The embed title uses the first
+ * hyphen-segment of the repo name as the project prefix
+ * (alchemy-effect → "Alchemy", distilled → "Distilled") and omits the
+ * channel suffix for stable `release` channel so you don't get
+ * "...(release) released" doubling up.
+ *
+ *   alchemy-effect + beta → Alchemy v2.0.0-beta.42 (beta) released
+ *   distilled + release  → Distilled v0.21.3 released
+ *
  * Reads DISCORD_WEBHOOK from the environment. Silently no-ops if unset.
  *
  * Usage: bun discord-notify.ts <tag> <release|beta|alpha|tag>
@@ -31,6 +41,16 @@ if (!webhook) {
 }
 
 const REPO = repo();
+const repoSlug = REPO.split("/")[1]!;
+const capitalize = (s: string) =>
+  s.length === 0 ? s : s[0]!.toUpperCase() + s.slice(1);
+// "alchemy-effect" -> "Alchemy-Effect"
+const fullRepoName = repoSlug.split("-").map(capitalize).join("-");
+// "alchemy-effect" -> "Alchemy"
+const projectName = capitalize(repoSlug.split("-")[0]!);
+const botName = `${fullRepoName} Releases`;
+const titleChannel = channel === "release" ? "" : ` (${channel})`;
+const title = `${projectName} ${tag}${titleChannel} released`;
 
 const changelogPath = join(process.cwd(), "CHANGELOG.md");
 const changelog = await readFile(changelogPath, "utf-8");
@@ -56,9 +76,10 @@ const res = await fetch(webhook, {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
+    username: botName,
     embeds: [
       {
-        title: `${tag} (${channel}) released`,
+        title,
         url: releaseUrl,
         description,
       },
