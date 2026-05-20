@@ -76,9 +76,20 @@ jobs:
 
 ### `pr-package.yml`
 
-Publishes a tarball per package to [`pkg.ing`](https://pkg.ing) on every
-push-to-main and PR sync. On PR open/sync, leaves a sticky comment with
-install URLs pinned to the head commit.
+Publishes per-package tarballs to a pr-package service (default
+[`pkg.ing`](https://pkg.ing)) on every push-to-main and PR sync, and
+leaves a sticky PR comment with install URLs pinned to the head commit.
+
+**Partial builds.** Only packages whose own dir OR a transitive
+workspace dep's dir changed are rebuilt — the dep graph is derived from
+each `package.json`'s `workspace:*` deps, so a touch to `core/` rebuilds
+every leaf that depends on it. A `force-ci` PR label overrides and
+rebuilds everything; touching `bun.lock`, root `package.json`, or this
+workflow's yaml also rebuilds everything.
+
+**Cleanup on PR close.** Every tag we assigned for the PR (branch,
+`pr-N`, short SHA, long SHA) is deleted from every configured project
+so the underlying tarballs orphan and the bucket cleans them up.
 
 ```yaml
 # consumer .github/workflows/pr-package.yml
@@ -87,19 +98,34 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened, closed, labeled]
 jobs:
   pr-package:
     uses: alchemy-run/actions/.github/workflows/pr-package.yml@main
     with:
       packages: |
         [
-          { "dir": "packages/alchemy", "project": "alchemy" },
-          { "dir": "packages/better-auth", "project": "@alchemy.run/better-auth" },
-          { "dir": "packages/pr-package", "project": "@alchemy.run/pr-package" }
+          { "dir": "packages/alchemy",     "name": "alchemy" },
+          { "dir": "packages/better-auth", "name": "@alchemy.run/better-auth" },
+          { "dir": "packages/pr-package",  "name": "@alchemy.run/pr-package" }
         ]
     secrets: inherit
 ```
+
+**Per-package config** (all optional except `dir` and `name`):
+
+| Field      | Default          | Meaning                                                  |
+| ---------- | ---------------- | -------------------------------------------------------- |
+| `dir`      | —                | Workspace path (e.g. `packages/aws`)                    |
+| `name`     | —                | npm package name (used for the workspace-dep graph)      |
+| `project`  | = `name`         | Project name in the pr-package upload URL                |
+| `install`  | = `project`      | Path used in the `bun add` URL on PR comments            |
+| `runner`   | `ubuntu-latest`  | Override the GitHub runner (e.g. for huge builds)        |
+
+Top-level inputs include `pr-package-host` (upload target, default
+`pkg.ing`), `install-host` (CDN host for PR-comment URLs; defaults to
+`pr-package-host`), `build-command` (default `bun run build`, run
+per-package), and `force-ci-label` (default `force-ci`).
 
 ## Required secrets (inherited from the caller)
 

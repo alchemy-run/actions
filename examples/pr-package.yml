@@ -7,7 +7,8 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    # `labeled` so adding the `force-ci` label re-triggers the run.
+    types: [opened, synchronize, reopened, closed, labeled]
 
 jobs:
   pr-package:
@@ -15,8 +16,17 @@ jobs:
     with:
       packages: |
         [
-          { "dir": "packages/alchemy",     "project": "alchemy" },
-          { "dir": "packages/better-auth", "project": "@alchemy.run/better-auth" },
-          { "dir": "packages/pr-package",  "project": "@alchemy.run/pr-package" }
+          {
+            "dir": "packages/alchemy",
+            "name": "alchemy"
+          },
+          {
+            "dir": "packages/better-auth",
+            "name": "@alchemy.run/better-auth"
+          },
+          {
+            "dir": "packages/pr-package",
+            "name": "@alchemy.run/pr-package"
+          }
         ]
     secrets: inherit

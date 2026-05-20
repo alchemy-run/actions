@@ -1,9 +1,17 @@
 name: pr-package (reusable)
 
-# Reusable workflow that publishes each configured workspace package as a
-# tarball to the pr-package service at pkg.ing on every push-to-main and
-# every PR sync, and leaves a sticky PR comment with install URLs pinned
-# to the head commit.
+# Reusable workflow that publishes per-package tarballs to a pr-package
+# service on every push-to-main and PR sync, and leaves a sticky PR
+# comment with install URLs pinned to the head commit.
+#
+# Only packages whose own dir OR a transitive workspace dep's dir
+# changed are rebuilt + republished. The PR label `force-ci` overrides
+# that and rebuilds everything; touching the lockfile or root
+# package.json also rebuilds everything.
+#
+# On PR close (merge or otherwise), deletes every tag we ever assigned
+# for the PR across every configured project so the underlying tarballs
+# orphan and the bucket cleans them up.
 #
 # See README.md in this repo for the calling-side example.
 
@@ -12,31 +20,51 @@ on:
     inputs:
       packages:
         description: >-
-          JSON array of `{ "dir": "...", "project": "..." }` objects, one
-          per package to publish. `dir` is the workspace path; `project`
-          is the pr-package project name (matches the npm package name).
+          JSON array of `{ "dir": "...", "name": "...", "project": "...",
+          "install": "...", "runner": "..." }`. `dir` is the workspace
+          path; `name` is the npm package name (for the dep graph);
+          `project` is the pr-package project name in the upload URL
+          (defaults to `name`); `install` is the path used in the
+          `bun add` URL on PR comments (defaults to `project`); `runner`
+          overrides the default GitHub runner per package.
         required: true
         type: string
       pr-package-host:
-        description: "pr-package host"
+        description: "Host the tarballs upload to"
         required: false
         type: string
         default: pkg.ing
-      build-command:
-        description: "Build command run before packing"
+      install-host:
+        description: >-
+          Host shown in the PR-comment install URLs. Defaults to
+          pr-package-host. Useful for projects with a custom CNAME like
+          pkg.distilled.cloud.
         required: false
         type: string
-        default: "bun run build:packages"
+        default: ""
+      build-command:
+        description: >-
+          Build command run in each changed package's directory. Default
+          `bun run build`; tsc-style project references will build deps
+          transitively as a side effect.
+        required: false
+        type: string
+        default: "bun run build"
       node-version:
-        description: "Node version"
+        description: Node version
         required: false
         type: string
         default: "24"
       actions-ref:
-        description: "Ref of the alchemy-run/actions repo to check out"
+        description: Ref of the alchemy-run/actions repo to check out
         required: false
         type: string
         default: main
+      force-ci-label:
+        description: "PR label that forces rebuild of every package"
+        required: false
+        type: string
+        default: force-ci
 
 permissions:
   contents: read
@@ -46,13 +74,21 @@ env:
   ACTIONS_DIR: .alchemy-actions
 
 jobs:
-  publish:
+  # ── Decide which packages need to be rebuilt this run. ──────────────
+  detect-changes:
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'pull_request' && github.event.action != 'closed')
     runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.compute.outputs.changed }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # PR builds need history back to the base SHA so we can diff
+          # against it; push builds only need HEAD~1. fetch-depth: 0 is
+          # cheap enough at this repo size and avoids the conditional.
+          fetch-depth: 0
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -63,12 +99,86 @@ jobs:
       - uses: ./.alchemy-actions/actions/setup
         with:
           node-version: ${{ inputs.node-version }}
+          install: "false"
 
-      - name: Build
-        run: ${{ inputs.build-command }}
+      - name: Install actions deps
+        working-directory: ${{ env.ACTIONS_DIR }}
+        run: bun install
 
-      - name: Compute tags
-        id: tags
+      - id: compute
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          FORCE_LABEL_PRESENT: ${{ contains(github.event.pull_request.labels.*.name, inputs.force-ci-label) }}
+          PACKAGES_JSON: ${{ inputs.packages }}
+        run: |
+          set -euo pipefail
+
+          DIRS=$(printf '%s' "$PACKAGES_JSON" | jq -c '[.[].dir]')
+          NAMES=$(printf '%s' "$PACKAGES_JSON" | jq -c '[.[].name]')
+          export ALCHEMY_PUBLISHABLE_DIRS="$DIRS"
+          export ALCHEMY_PUBLISHABLE_NAMES="$NAMES"
+
+          if [ "$FORCE_LABEL_PRESENT" = "true" ]; then
+            echo "force-ci label present — rebuilding every package."
+            ALL=$(printf '%s' "$PACKAGES_JSON" | jq -c '.')
+            echo "changed=$ALL" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$EVENT" = "pull_request" ]; then
+            FROM="$BASE_SHA"
+            TO="$HEAD_SHA"
+          else
+            FROM="${HEAD_SHA}~1"
+            TO="$HEAD_SHA"
+          fi
+
+          echo "Diffing $FROM..$TO"
+          DIFF=$(git diff --name-only "$FROM" "$TO")
+          echo "Changed files:"
+          printf '  %s\n' $DIFF || true
+
+          # compute-changed.ts outputs `{all,changed}` based on dep
+          # graph. We then enrich the returned list with the rest of
+          # each package's config (project/install/runner) from the
+          # input so the matrix can pick them up directly.
+          AFFECTED=$(printf '%s\n' "$DIFF" \
+            | bun "$ACTIONS_DIR/scripts/release/compute-changed.ts")
+          echo "compute-changed result: $AFFECTED"
+
+          # Project/install/runner defaults: project = name,
+          # install = project, runner = ubuntu-latest. Merge in any
+          # explicit overrides from the input PACKAGES_JSON.
+          MATRIX=$(jq -nc \
+            --argjson packages "$PACKAGES_JSON" \
+            --argjson affected "$AFFECTED" '
+              ($packages | map({ key: .dir, value: . }) | from_entries) as $byDir
+              | $affected.changed
+              | map(. as $a
+                    | ($byDir[$a.dir] // {}) as $cfg
+                    | { dir: $a.dir,
+                        name: $a.name,
+                        project: ($cfg.project // $a.name),
+                        install: ($cfg.install // $cfg.project // $a.name),
+                        runner:  ($cfg.runner  // "ubuntu-latest") })
+            ')
+
+          echo "Matrix: $MATRIX"
+          echo "changed=$MATRIX" >> "$GITHUB_OUTPUT"
+
+  # ── Compute install/CDN tags once so every matrix job + the comment
+  # job use the same set. ─────────────────────────────────────────────
+  tags:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.changed != '[]'
+    runs-on: ubuntu-latest
+    outputs:
+      tags: ${{ steps.tags.outputs.tags }}
+      short: ${{ steps.tags.outputs.short }}
+    steps:
+      - id: tags
         env:
           EVENT: ${{ github.event_name }}
           BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
@@ -87,50 +197,75 @@ jobs:
           echo "short=$short" >> "$GITHUB_OUTPUT"
           echo "Tags: $json"
 
-      - name: Publish packages
+  # ── Build + publish each changed package in parallel. ───────────────
+  publish:
+    needs: [detect-changes, tags]
+    if: needs.detect-changes.outputs.changed != '[]'
+    runs-on: ${{ matrix.package.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.detect-changes.outputs.changed) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+
+      - uses: ./.alchemy-actions/actions/setup
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build ${{ matrix.package.name }}
+        working-directory: ${{ matrix.package.dir }}
+        run: ${{ inputs.build-command }}
+
+      - name: Publish ${{ matrix.package.name }}
         env:
           PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
           TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
-          TAGS: ${{ steps.tags.outputs.tags }}
+          TAGS: ${{ needs.tags.outputs.tags }}
           TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-          PACKAGES_JSON: ${{ inputs.packages }}
+          PROJECT: ${{ matrix.package.project }}
+        working-directory: ${{ matrix.package.dir }}
         run: |
           set -euo pipefail
+          rm -f -- *.tgz
+          bun pm pack --destination .
+          tgz=$(ls *.tgz)
+          echo "Publishing ${PROJECT} ($tgz) with tags $TAGS ttl=${TTL:-default}"
+          if [ -n "$TTL" ]; then
+            curl -fsSL --show-error -X PUT \
+              "https://${PR_PACKAGE_HOST}/projects/${PROJECT}/packages" \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H "X-Tags: ${TAGS}" \
+              -H "X-TTL: ${TTL}" \
+              -H "Content-Type: application/gzip" \
+              --data-binary "@${tgz}"
+          else
+            curl -fsSL --show-error -X PUT \
+              "https://${PR_PACKAGE_HOST}/projects/${PROJECT}/packages" \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H "X-Tags: ${TAGS}" \
+              -H "Content-Type: application/gzip" \
+              --data-binary "@${tgz}"
+          fi
 
-          rows=$(printf '%s' "$PACKAGES_JSON" | jq -c '.[]')
-          while IFS= read -r row; do
-            dir=$(printf '%s' "$row" | jq -r '.dir')
-            project=$(printf '%s' "$row" | jq -r '.project')
-            echo "::group::Publish $project (from $dir)"
-            (
-              cd "$dir"
-              rm -f -- *.tgz
-              bun pm pack --destination .
-              tgz=$(ls *.tgz)
-              echo "Publishing $tgz with tags $TAGS ttl=${TTL:-default}"
-              if [ -n "$TTL" ]; then
-                curl -fsSL --show-error -X PUT \
-                  "https://${PR_PACKAGE_HOST}/projects/${project}/packages" \
-                  -H "Authorization: Bearer ${TOKEN}" \
-                  -H "X-Tags: ${TAGS}" \
-                  -H "X-TTL: ${TTL}" \
-                  -H "Content-Type: application/gzip" \
-                  --data-binary "@${tgz}"
-              else
-                curl -fsSL --show-error -X PUT \
-                  "https://${PR_PACKAGE_HOST}/projects/${project}/packages" \
-                  -H "Authorization: Bearer ${TOKEN}" \
-                  -H "X-Tags: ${TAGS}" \
-                  -H "Content-Type: application/gzip" \
-                  --data-binary "@${tgz}"
-              fi
-              rm -f -- *.tgz
-            )
-            echo "::endgroup::"
-          done <<< "$rows"
-
+  # ── PR-only: sticky comment with install URLs pinned to this commit.
+  # `always()` so a single matrix failure doesn't drop the comment for
+  # the packages that did publish. ────────────────────────────────────
+  comment:
+    needs: [detect-changes, tags, publish]
+    if: >-
+      always() && github.event_name == 'pull_request' &&
+      needs.detect-changes.outputs.changed != '[]' &&
+      needs.tags.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
       - name: Generate bot token
-        if: github.event_name == 'pull_request'
         id: bot-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -138,33 +273,33 @@ jobs:
           private-key: ${{ secrets.ALCHEMY_VERSION_BOT_PRIVATE_KEY }}
 
       - name: Comment on PR
-        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ steps.bot-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          SHORT_SHA: ${{ steps.tags.outputs.short }}
-          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
-          PACKAGES_JSON: ${{ inputs.packages }}
+          SHORT_SHA: ${{ needs.tags.outputs.short }}
+          INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
+          CHANGED: ${{ needs.detect-changes.outputs.changed }}
         run: |
           set -euo pipefail
           MARKER="<!-- pr-package-comment -->"
 
-          # Build the body: one section per package with an aliased
-          # `bun add <name>@<url>` install snippet. The aliased form
-          # bypasses a bun resolver bug that surfaces when adding an
-          # unnamed URL for a package already resolved from npm
-          # (oven-sh/bun#5789, oven-sh/bun#17946).
           {
             printf '%s\n\n' "$MARKER"
             printf 'Install the packages built from this commit:\n\n'
-            printf '%s' "$PACKAGES_JSON" | jq -r '.[] | .project' \
-              | while IFS= read -r project; do
-                printf '**%s**\n' "$project"
-                printf '```sh\n'
-                printf 'bun add %s@https://%s/%s/%s\n' "$project" "$PR_PACKAGE_HOST" "$project" "$SHORT_SHA"
-                printf '```\n\n'
-              done
+            printf '%s' "$CHANGED" | jq -r '.[] | @json' | while IFS= read -r row; do
+              name=$(printf '%s' "$row" | jq -r '.name')
+              install=$(printf '%s' "$row" | jq -r '.install')
+              printf '**%s**\n' "$name"
+              printf '```sh\n'
+              # Use `bun add <name>@<url>` instead of `bun add <url>`.
+              # Without an explicit name, bun's resolver hits a
+              # DependencyLoop bug when the consumer already has the
+              # same package name resolved from npm
+              # (oven-sh/bun#5789, oven-sh/bun#17946).
+              printf 'bun add %s@https://%s/%s/%s\n' "$name" "$INSTALL_HOST" "$install" "$SHORT_SHA"
+              printf '```\n\n'
+            done
           } > /tmp/pr-package-body.md
 
           BODY=$(cat /tmp/pr-package-body.md)
@@ -179,3 +314,48 @@ jobs:
           else
             gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY"
           fi
+
+  # ── Cleanup on PR close (merged or not). ────────────────────────────
+  # Deletes the branch tag, pr-<number> tag, and short+long sha tags
+  # for every commit in the PR across every configured project.
+  # 404s are ignored (tag may have been TTL'd or never set).
+  cleanup:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete tags
+        env:
+          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
+          TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PACKAGES_JSON: ${{ inputs.packages }}
+        run: |
+          set -euo pipefail
+
+          shas=$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/commits" --jq '.[].sha')
+
+          tags=()
+          while IFS= read -r sha; do
+            [ -z "$sha" ] && continue
+            tags+=("$sha" "${sha:0:7}")
+          done <<< "$shas"
+          tags+=("$BRANCH" "pr-${PR_NUMBER}")
+
+          unique=$(printf '%s\n' "${tags[@]}" | sort -u)
+
+          projects=$(printf '%s' "$PACKAGES_JSON" | jq -r '.[] | (.project // .name)')
+
+          while IFS= read -r project; do
+            [ -z "$project" ] && continue
+            while IFS= read -r tag; do
+              [ -z "$tag" ] && continue
+              encoded=$(jq -rn --arg t "$tag" '$t|@uri')
+              code=$(curl -sS -o /dev/null -w "%{http_code}" -X DELETE \
+                "https://${PR_PACKAGE_HOST}/projects/${project}/tags/${encoded}" \
+                -H "Authorization: Bearer ${TOKEN}")
+              echo "DELETE ${project}:${tag} → ${code}"
+            done <<< "$unique"
+          done <<< "$projects"
