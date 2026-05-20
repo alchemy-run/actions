@@ -17,12 +17,12 @@
  *   $ bun compute-waves.ts
  *   wave1=[{"dir":"packages/core","name":"@x/core"}]
  *   wave2=[{"dir":"packages/aws","name":"@x/aws"},{"dir":"packages/cf","name":"@x/cf"}]
- *   wave3=[]
- *   wave4=[]
- *   wave5=[]
- *   waves=[[{...}],[{...},{...}],[],[],[]]
+ *   waves=[[{...}],[{...},{...}]]
  *
- * Errors out (non-zero exit) if the graph has a cycle.
+ * Errors out (non-zero exit) if the graph has a cycle or exceeds two
+ * levels (every project we currently release fits in 2 waves — anchor
+ * + everything-else; if you genuinely need a third, bump MAX_WAVES
+ * here and add a matching publish-wave-3 job to release.yml).
  *
  * Reads ALCHEMY_PUBLISHABLE_DIRS / ALCHEMY_PUBLISHABLE_NAMES.
  */
@@ -30,7 +30,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { publishableDirs, publishableNames } from "./config.ts";
 
-const MAX_WAVES = 5;
+const MAX_WAVES = 2;
 
 const dirs = publishableDirs();
 const names = publishableNames();

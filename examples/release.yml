@@ -17,6 +17,12 @@ on:
         type: string
         default: ""
 
+# Reusable workflows can't widen permissions — the caller must grant
+# `contents: write` (commit + tag) and `id-token: write` (npm OIDC).
+permissions:
+  contents: write
+  id-token: write
+
 jobs:
   release:
     uses: alchemy-run/actions/.github/workflows/release.yml@main
