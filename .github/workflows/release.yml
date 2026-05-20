@@ -1,0 +1,363 @@
+name: Release NPM Package (reusable)
+
+# Reusable workflow that bumps versions across a set of publishable
+# workspace packages, commits + tags, publishes each to npm with OIDC
+# trusted publishing, then cuts a GitHub Release and notifies Discord.
+#
+# See README.md in this repo for the calling-side example.
+
+on:
+  workflow_call:
+    inputs:
+      channel:
+        description: "Release channel: release | beta | alpha | tag"
+        required: true
+        type: string
+      spec:
+        description: >-
+          Channel-specific value. tag: REQUIRED, the explicit full version
+          (e.g. 2.0.0-experimental.1). release: REQUIRED,
+          patch|minor|major or an explicit x.y.z. beta|alpha: optional, an
+          integer N to force <current-version>-<channel>.N; leave blank to
+          auto-increment.
+        required: false
+        type: string
+        default: ""
+      repo:
+        description: "<owner>/<repo> of the caller, e.g. alchemy-run/alchemy-effect"
+        required: true
+        type: string
+      current-version:
+        description: "Anchor version for prerelease bumps, e.g. 2.0.0"
+        required: true
+        type: string
+      packages:
+        description: >-
+          JSON array of `{ "dir": "...", "name": "..." }` objects, one per
+          publishable workspace package. Order matters: the first package
+          publishes first; the rest publish after it succeeds. (Layer
+          packages typically depend on the first package and need it on
+          npm first.)
+        required: true
+        type: string
+      build-command:
+        description: "Build command run by the bump job before publishing"
+        required: false
+        type: string
+        default: "bun run build:packages"
+      node-version:
+        description: "Node version"
+        required: false
+        type: string
+        default: "24"
+      actions-ref:
+        description: >-
+          Ref of the alchemy-run/actions repo to check out for the
+          release scripts. Pin to a sha or tag in production.
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  ACTIONS_DIR: .alchemy-actions
+  ALCHEMY_REPO: ${{ inputs.repo }}
+  ALCHEMY_CURRENT_VERSION: ${{ inputs.current-version }}
+
+jobs:
+  # ── Step 1: Compute the next version and stage the bump in-memory. ──
+  bump:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      channel: ${{ inputs.channel }}
+      sha: ${{ steps.sha.outputs.sha }}
+      dirs: ${{ steps.parse.outputs.dirs }}
+      names: ${{ steps.parse.outputs.names }}
+      artifact-paths: ${{ steps.parse.outputs.artifact-paths }}
+    env:
+      CHANNEL: ${{ inputs.channel }}
+      SPEC: ${{ inputs.spec }}
+    steps:
+      - name: Validate inputs
+        run: |
+          case "$CHANNEL" in
+            release|beta|alpha|tag) ;;
+            *) echo "::error::invalid channel '$CHANNEL'"; exit 1 ;;
+          esac
+          case "$CHANNEL" in
+            tag)
+              if [ -z "$SPEC" ]; then
+                echo "::error::'tag' channel requires an explicit version in 'spec'"
+                exit 1
+              fi
+              ;;
+            release)
+              if [ -z "$SPEC" ]; then
+                echo "::error::'release' channel requires a 'spec' (patch|minor|major|x.y.z)"
+                exit 1
+              fi
+              ;;
+          esac
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+
+      - id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - id: parse
+        env:
+          PACKAGES_JSON: ${{ inputs.packages }}
+        run: |
+          set -euo pipefail
+          DIRS=$(printf '%s' "$PACKAGES_JSON" | jq -c '[.[].dir]')
+          NAMES=$(printf '%s' "$PACKAGES_JSON" | jq -c '[.[].name]')
+          # Artifact upload paths: each pkg's package.json, lib, bin (if present)
+          # plus the workspace lockfile.
+          PATHS=$(printf '%s' "$PACKAGES_JSON" | jq -r '
+            [.[].dir] as $dirs
+            | ($dirs | map("\(.)/package.json")
+               + ($dirs | map("\(.)/lib"))
+               + ($dirs | map("\(.)/bin")))
+            | .[]')
+          PATHS="${PATHS}
+          bun.lock"
+          {
+            echo "dirs=$DIRS"
+            echo "names=$NAMES"
+            echo "artifact-paths<<EOF"
+            echo "$PATHS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: ./.alchemy-actions/actions/setup
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install actions deps
+        working-directory: ${{ env.ACTIONS_DIR }}
+        run: bun install
+
+      - id: bump
+        env:
+          ALCHEMY_PUBLISHABLE_DIRS: ${{ steps.parse.outputs.dirs }}
+          ALCHEMY_PUBLISHABLE_NAMES: ${{ steps.parse.outputs.names }}
+        run: |
+          set -euo pipefail
+          if [ -n "$SPEC" ]; then
+            VERSION=$(bun "$ACTIONS_DIR/scripts/release/bump.ts" "$CHANNEL" "$SPEC")
+          else
+            VERSION=$(bun "$ACTIONS_DIR/scripts/release/bump.ts" "$CHANNEL")
+          fi
+          echo "Resolved version: $VERSION (channel: $CHANNEL)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build packages
+        run: ${{ inputs.build-command }}
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bump-files
+          path: ${{ steps.parse.outputs.artifact-paths }}
+          if-no-files-found: warn
+          retention-days: 7
+          include-hidden-files: true
+
+  # ── Step 2: Commit (bump + changelog) and tag BEFORE publishing. ──
+  commit-and-tag:
+    needs: bump
+    if: inputs.channel != 'tag'
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: Generate bot token
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ALCHEMY_VERSION_BOT_ID }}
+          private-key: ${{ secrets.ALCHEMY_VERSION_BOT_PRIVATE_KEY }}
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          token: ${{ steps.bot-token.outputs.token }}
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bump-files
+
+      - uses: ./.alchemy-actions/actions/setup
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install actions deps
+        working-directory: ${{ env.ACTIONS_DIR }}
+        run: bun install
+
+      - name: Configure git
+        run: |
+          git config user.email "alchemy-version-bot[bot]@users.noreply.github.com"
+          git config user.name "alchemy-version-bot[bot]"
+
+      - id: commit
+        name: Commit bump + changelog, tag, push
+        env:
+          VERSION: ${{ needs.bump.outputs.version }}
+          DIRS: ${{ needs.bump.outputs.dirs }}
+          ALCHEMY_PUBLISHABLE_DIRS: ${{ needs.bump.outputs.dirs }}
+          ALCHEMY_PUBLISHABLE_NAMES: ${{ needs.bump.outputs.names }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+
+          HEAD_TAG=$(git describe --exact-match --tags HEAD 2>/dev/null || true)
+          if [ "$HEAD_TAG" = "$TAG" ]; then
+            echo "HEAD is already at ${TAG}; skipping commit/tag/push"
+            SHA=$(git rev-parse HEAD)
+            echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          bun "$ACTIONS_DIR/scripts/release/release-notes.ts" "${TAG}"
+
+          # Stage every bumped package.json + lockfile + new changelog entry.
+          mapfile -t PKG_JSONS < <(printf '%s' "$DIRS" | jq -r '.[] | "\(.)/package.json"')
+          git add "${PKG_JSONS[@]}" bun.lock CHANGELOG.md
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit (already on a release commit?)"
+          else
+            git commit -m "chore(release): ${VERSION}"
+          fi
+
+          if ! git rev-parse --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+            git tag -a "${TAG}" -m "Release ${TAG}"
+          fi
+
+          git push origin HEAD
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already on remote, skipping tag push"
+          else
+            git push origin "refs/tags/${TAG}"
+          fi
+
+          SHA=$(git rev-parse HEAD)
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+  # ── Step 3: Build and publish each package sequentially. ──
+  # The first package publishes first (layer packages typically depend on
+  # it being on npm before they resolve). Subsequent packages publish in
+  # array order. `publish-package.ts` is idempotent, so re-running this
+  # job after a partial failure is safe.
+  publish:
+    needs: [bump, commit-and-tag]
+    if: >-
+      always() && needs.bump.result == 'success' &&
+      (needs.commit-and-tag.result == 'success' ||
+       needs.commit-and-tag.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.commit-and-tag.outputs.sha || needs.bump.outputs.sha }}
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bump-files
+
+      - uses: ./.alchemy-actions/actions/setup
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://registry.npmjs.org/
+
+      - name: Upgrade npm for OIDC trusted publishing
+        run: |
+          npm install -g npm@latest && npm --version
+          sed -i '/always-auth/d' ~/.npmrc 2>/dev/null || true
+
+      - name: Install actions deps
+        working-directory: ${{ env.ACTIONS_DIR }}
+        run: bun install
+
+      - name: Publish packages
+        env:
+          CHANNEL: ${{ needs.bump.outputs.channel }}
+          DIRS: ${{ needs.bump.outputs.dirs }}
+          ALCHEMY_PUBLISHABLE_DIRS: ${{ needs.bump.outputs.dirs }}
+          ALCHEMY_PUBLISHABLE_NAMES: ${{ needs.bump.outputs.names }}
+        run: |
+          set -euo pipefail
+          mapfile -t DIRS_ARR < <(printf '%s' "$DIRS" | jq -r '.[]')
+          for dir in "${DIRS_ARR[@]}"; do
+            echo "::group::Publish $dir"
+            bun "$ACTIONS_DIR/scripts/release/publish-package.ts" "$dir" "$CHANNEL"
+            echo "::endgroup::"
+          done
+
+  # ── Step 4: Create GitHub Release and notify Discord. ──
+  finalize:
+    needs: [bump, commit-and-tag, publish]
+    if: inputs.channel != 'tag' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.commit-and-tag.outputs.sha }}
+          fetch-depth: 0
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+
+      - uses: ./.alchemy-actions/actions/setup
+        with:
+          node-version: ${{ inputs.node-version }}
+          install: "false"
+
+      - name: Install actions deps
+        working-directory: ${{ env.ACTIONS_DIR }}
+        run: bun install
+
+      - name: Create GitHub Release
+        env:
+          VERSION: ${{ needs.bump.outputs.version }}
+          CHANNEL: ${{ needs.bump.outputs.channel }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun "$ACTIONS_DIR/scripts/release/github-release.ts" "v${VERSION}" "${CHANNEL}"
+
+      - name: Notify Discord
+        if: success() && env.DISCORD_WEBHOOK != ''
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          VERSION: ${{ needs.bump.outputs.version }}
+          CHANNEL: ${{ needs.bump.outputs.channel }}
+        run: bun "$ACTIONS_DIR/scripts/release/discord-notify.ts" "v${VERSION}" "${CHANNEL}"

@@ -1,0 +1,20 @@
+{
+  "name": "@alchemy-run/actions",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alchemy-run/actions"
+  },
+  "type": "module",
+  "description": "Shared CI/CD workflows and scripts for the Alchemy projects",
+  "dependencies": {
+    "changelogithub": "^13.16.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "latest",
+    "typescript": "latest"
+  }
+}

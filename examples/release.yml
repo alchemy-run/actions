@@ -1,0 +1,44 @@
+# Example consumer workflow. Drop into `.github/workflows/release.yml` in
+# the consumer repo (alchemy-effect, async-alchemy, distilled, …) and
+# adjust `with:` to match the repo's publishable workspace packages.
+
+name: Release NPM Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Release channel"
+        required: true
+        type: choice
+        default: beta
+        options:
+          - release
+          - beta
+          - alpha
+          - tag
+      spec:
+        description: >-
+          Channel-specific value. tag: REQUIRED, the explicit full version
+          (e.g. 2.0.0-experimental.1). release: REQUIRED,
+          patch|minor|major or an explicit x.y.z. beta|alpha: optional, an
+          integer N to force <current-version>-<channel>.N; leave blank
+          to auto-increment.
+        required: false
+        type: string
+
+jobs:
+  release:
+    uses: alchemy-run/actions/.github/workflows/release.yml@main
+    with:
+      channel: ${{ inputs.channel }}
+      spec: ${{ inputs.spec }}
+      repo: alchemy-run/alchemy-effect
+      current-version: "2.0.0"
+      packages: |
+        [
+          { "dir": "packages/alchemy",     "name": "alchemy" },
+          { "dir": "packages/better-auth", "name": "@alchemy.run/better-auth" },
+          { "dir": "packages/pr-package",  "name": "@alchemy.run/pr-package" }
+        ]
+    secrets: inherit

@@ -1,0 +1,181 @@
+name: pr-package (reusable)
+
+# Reusable workflow that publishes each configured workspace package as a
+# tarball to the pr-package service at pkg.ing on every push-to-main and
+# every PR sync, and leaves a sticky PR comment with install URLs pinned
+# to the head commit.
+#
+# See README.md in this repo for the calling-side example.
+
+on:
+  workflow_call:
+    inputs:
+      packages:
+        description: >-
+          JSON array of `{ "dir": "...", "project": "..." }` objects, one
+          per package to publish. `dir` is the workspace path; `project`
+          is the pr-package project name (matches the npm package name).
+        required: true
+        type: string
+      pr-package-host:
+        description: "pr-package host"
+        required: false
+        type: string
+        default: pkg.ing
+      build-command:
+        description: "Build command run before packing"
+        required: false
+        type: string
+        default: "bun run build:packages"
+      node-version:
+        description: "Node version"
+        required: false
+        type: string
+        default: "24"
+      actions-ref:
+        description: "Ref of the alchemy-run/actions repo to check out"
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  ACTIONS_DIR: .alchemy-actions
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+
+      - uses: ./.alchemy-actions/actions/setup
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build
+        run: ${{ inputs.build-command }}
+
+      - name: Compute tags
+        id: tags
+        env:
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          short="${SHA:0:7}"
+          long="$SHA"
+          tags=("$short" "$long" "$BRANCH")
+          if [ "$EVENT" = "pull_request" ]; then
+            tags+=("pr-${PR_NUMBER}")
+          fi
+          json=$(printf '%s\n' "${tags[@]}" | jq -R . | jq -s -c .)
+          echo "tags=$json" >> "$GITHUB_OUTPUT"
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+          echo "Tags: $json"
+
+      - name: Publish packages
+        env:
+          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
+          TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
+          TAGS: ${{ steps.tags.outputs.tags }}
+          TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
+          PACKAGES_JSON: ${{ inputs.packages }}
+        run: |
+          set -euo pipefail
+
+          rows=$(printf '%s' "$PACKAGES_JSON" | jq -c '.[]')
+          while IFS= read -r row; do
+            dir=$(printf '%s' "$row" | jq -r '.dir')
+            project=$(printf '%s' "$row" | jq -r '.project')
+            echo "::group::Publish $project (from $dir)"
+            (
+              cd "$dir"
+              rm -f -- *.tgz
+              bun pm pack --destination .
+              tgz=$(ls *.tgz)
+              echo "Publishing $tgz with tags $TAGS ttl=${TTL:-default}"
+              if [ -n "$TTL" ]; then
+                curl -fsSL --show-error -X PUT \
+                  "https://${PR_PACKAGE_HOST}/projects/${project}/packages" \
+                  -H "Authorization: Bearer ${TOKEN}" \
+                  -H "X-Tags: ${TAGS}" \
+                  -H "X-TTL: ${TTL}" \
+                  -H "Content-Type: application/gzip" \
+                  --data-binary "@${tgz}"
+              else
+                curl -fsSL --show-error -X PUT \
+                  "https://${PR_PACKAGE_HOST}/projects/${project}/packages" \
+                  -H "Authorization: Bearer ${TOKEN}" \
+                  -H "X-Tags: ${TAGS}" \
+                  -H "Content-Type: application/gzip" \
+                  --data-binary "@${tgz}"
+              fi
+              rm -f -- *.tgz
+            )
+            echo "::endgroup::"
+          done <<< "$rows"
+
+      - name: Generate bot token
+        if: github.event_name == 'pull_request'
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.ALCHEMY_VERSION_BOT_ID }}
+          private-key: ${{ secrets.ALCHEMY_VERSION_BOT_PRIVATE_KEY }}
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ steps.bot-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SHORT_SHA: ${{ steps.tags.outputs.short }}
+          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
+          PACKAGES_JSON: ${{ inputs.packages }}
+        run: |
+          set -euo pipefail
+          MARKER="<!-- pr-package-comment -->"
+
+          # Build the body: one section per package with an aliased
+          # `bun add <name>@<url>` install snippet. The aliased form
+          # bypasses a bun resolver bug that surfaces when adding an
+          # unnamed URL for a package already resolved from npm
+          # (oven-sh/bun#5789, oven-sh/bun#17946).
+          {
+            printf '%s\n\n' "$MARKER"
+            printf 'Install the packages built from this commit:\n\n'
+            printf '%s' "$PACKAGES_JSON" | jq -r '.[] | .project' \
+              | while IFS= read -r project; do
+                printf '**%s**\n' "$project"
+                printf '```sh\n'
+                printf 'bun add %s@https://%s/%s/%s\n' "$project" "$PR_PACKAGE_HOST" "$project" "$SHORT_SHA"
+                printf '```\n\n'
+              done
+          } > /tmp/pr-package-body.md
+
+          BODY=$(cat /tmp/pr-package-body.md)
+
+          existing=$(gh api --paginate \
+            "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            --jq ".[] | select(.user.login == \"alchemy-version-bot[bot]\") | select(.body | startswith(\"${MARKER}\")) | .id" \
+            | head -1)
+
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" -f body="$BODY"
+          else
+            gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY"
+          fi

@@ -1,0 +1,22 @@
+# Example consumer workflow. Drop into `.github/workflows/pr-package.yml`
+# in the consumer repo and adjust `with:` to match the workspace.
+
+name: pr-package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+jobs:
+  pr-package:
+    uses: alchemy-run/actions/.github/workflows/pr-package.yml@main
+    with:
+      packages: |
+        [
+          { "dir": "packages/alchemy",     "project": "alchemy" },
+          { "dir": "packages/better-auth", "project": "@alchemy.run/better-auth" },
+          { "dir": "packages/pr-package",  "project": "@alchemy.run/pr-package" }
+        ]
+    secrets: inherit
