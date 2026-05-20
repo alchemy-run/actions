@@ -63,13 +63,24 @@ if (rawBody === undefined) {
 const body = toDiscordBody(rawBody);
 
 const releaseUrl = `https://github.com/${REPO}/releases/tag/${tag}`;
-const description = `${body}\n\n[Full release notes →](${releaseUrl})`;
-
+const footer = `\n\n[Full release notes →](${releaseUrl})`;
+// Discord embed descriptions cap at 4096 chars. If the rendered body
+// plus the footer would overflow, truncate the body to fit and prepend
+// a notice line so the reader knows there's more on GitHub. We cut at
+// the last newline before the budget so we never slice mid-bullet, then
+// fall back to a hard slice if no newline lands in range.
+const truncationNotice =
+  "_Release notes truncated — see the full changelog on GitHub._\n\n";
+let description = `${body}${footer}`;
 if (description.length > EMBED_DESCRIPTION_LIMIT) {
-  console.error(
-    `Changelog (${description.length} chars) exceeds Discord embed description limit (${EMBED_DESCRIPTION_LIMIT}). Trim the changelog or split the release.`,
+  const budget = EMBED_DESCRIPTION_LIMIT - footer.length - truncationNotice.length;
+  let cut = body.lastIndexOf("\n", budget);
+  if (cut < budget / 2) cut = budget; // no convenient newline — hard cut
+  const truncated = body.slice(0, cut).trimEnd();
+  description = `${truncationNotice}${truncated}${footer}`;
+  console.log(
+    `Changelog body (${body.length} chars) exceeded Discord limit; truncated to ${truncated.length} chars and linked to GitHub for the full notes.`,
   );
-  process.exit(1);
 }
 
 const res = await fetch(webhook, {
