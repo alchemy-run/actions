@@ -14,17 +14,20 @@ name: Release NPM Package (reusable)
 on:
   workflow_call:
     inputs:
-      channel:
-        description: "Release channel: release | beta | alpha | tag"
-        required: true
-        type: string
-      spec:
+      version:
         description: >-
-          Channel-specific value. tag: REQUIRED, the explicit full version
-          (e.g. 2.0.0-experimental.1). release: REQUIRED,
-          patch|minor|major or an explicit x.y.z. beta|alpha: optional, an
-          integer N to force <current-version>-<channel>.N; leave blank to
-          auto-increment.
+          Single string describing what to publish. Channel is inferred:
+
+            ""                    next beta (auto-increment)
+            patch | minor | major bump stable from current max on npm
+            x.y.z                 explicit stable release
+            beta | beta.N         next/forced beta on <current-version>
+            alpha | alpha.N       next/forced alpha on <current-version>
+            <tag-name>            tag release → version `0.0.0-<tag-name>`
+                                  (skips git commit/tag/GitHub Release)
+
+          Tag releases ALWAYS use 0.0.0-<name>; semver-shaped tag specs
+          (e.g. `2.0.0-experimental`) are rejected — pass just the name.
         required: false
         type: string
         default: ""
@@ -79,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.bump.outputs.version }}
-      channel: ${{ inputs.channel }}
+      channel: ${{ steps.bump.outputs.channel }}
       sha: ${{ steps.sha.outputs.sha }}
       dirs: ${{ steps.parse.outputs.dirs }}
       names: ${{ steps.parse.outputs.names }}
@@ -89,22 +92,8 @@ jobs:
       wave4: ${{ steps.waves.outputs.wave4 }}
       wave5: ${{ steps.waves.outputs.wave5 }}
     env:
-      CHANNEL: ${{ inputs.channel }}
-      SPEC: ${{ inputs.spec }}
+      VERSION_INPUT: ${{ inputs.version }}
     steps:
-      - name: Validate inputs
-        run: |
-          case "$CHANNEL" in
-            release|beta|alpha|tag) ;;
-            *) echo "::error::invalid channel '$CHANNEL'"; exit 1 ;;
-          esac
-          case "$CHANNEL" in
-            tag)
-              [ -n "$SPEC" ] || { echo "::error::'tag' channel requires an explicit version in 'spec'"; exit 1; } ;;
-            release)
-              [ -n "$SPEC" ] || { echo "::error::'release' channel requires a 'spec' (patch|minor|major|x.y.z)"; exit 1; } ;;
-          esac
-
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.ref }}
@@ -146,13 +135,10 @@ jobs:
           ALCHEMY_PUBLISHABLE_NAMES: ${{ steps.parse.outputs.names }}
         run: |
           set -euo pipefail
-          if [ -n "$SPEC" ]; then
-            VERSION=$(bun "$ACTIONS_DIR/scripts/release/bump.ts" "$CHANNEL" "$SPEC")
-          else
-            VERSION=$(bun "$ACTIONS_DIR/scripts/release/bump.ts" "$CHANNEL")
-          fi
-          echo "Resolved version: $VERSION (channel: $CHANNEL)"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # bump.ts emits `channel=<...>` and `version=<...>` on stdout
+          # so we can pipe straight into the step outputs file.
+          bun "$ACTIONS_DIR/scripts/release/bump.ts" "$VERSION_INPUT" \
+            | tee -a "$GITHUB_OUTPUT"
 
       # Compute waves AFTER bump so the package.json reads see the
       # freshly-written workspace versions (not strictly required for the
@@ -201,7 +187,7 @@ jobs:
   # commit; publish jobs check it out by SHA. Skipped for `tag` channel.
   commit-and-tag:
     needs: bump
-    if: inputs.channel != 'tag'
+    if: needs.bump.outputs.channel != 'tag'
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
@@ -463,7 +449,7 @@ jobs:
         publish-wave-5,
       ]
     if: >-
-      always() && inputs.channel != 'tag' &&
+      always() && needs.bump.outputs.channel != 'tag' &&
       needs.commit-and-tag.result == 'success' &&
       (needs.publish-wave-1.result == 'success' ||
        needs.publish-wave-1.result == 'skipped') &&

@@ -4,9 +4,13 @@
  *
  * Writes each `<dir>/package.json` and (via `bun install`) `bun.lock`.
  *
- * Prints the chosen version to stdout. All progress messages go to stderr,
- * so callers can capture the version with:
- *     VERSION=$(bun .../bump.ts ...)
+ * Prints two lines to stdout in `key=value` form so callers can pipe
+ * directly into `$GITHUB_OUTPUT`:
+ *
+ *     channel=<release|beta|alpha|tag>
+ *     version=<resolved x.y.z[-prerelease]>
+ *
+ * All progress messages go to stderr.
  *
  * Does NOT commit or push. The release workflow commits only after every
  * package has been published to npm, so an interrupted publish leaves no
@@ -17,31 +21,28 @@
  *   ALCHEMY_PUBLISHABLE_NAMES   JSON array of npm names (parallel to dirs)
  *   ALCHEMY_CURRENT_VERSION     Anchor for prerelease bumps (e.g. "2.0.0")
  *
- * Channels:
- *   release <patch|minor|major|x.y.z>
- *     Stable release. Bumps the named semver part relative to the current
- *     max stable version on npm of the FIRST publishable package, or uses
- *     the explicit version as-is.
+ * Single positional arg — the version spec. The script infers the
+ * release channel from its shape:
  *
- *   beta [N] / alpha [N]
- *     Auto-incrementing pre-release. With no spec, queries npm for the
- *     max ALCHEMY_CURRENT_VERSION-{channel}.N across every publishable
- *     package and increments.
- *
- *     Resume behavior: if a prior release published some packages but not
- *     others, or published everything but the git tag is missing on the
- *     remote, we resume at that N instead of incrementing past it.
- *
- *   tag <version>
- *     Use <version> verbatim.
+ *   ""                empty → beta channel, auto-increment
+ *   patch|minor|major release channel, bumps from current max stable
+ *   x.y.z             release channel, explicit
+ *   beta[.N]          beta channel; with N, force; without, auto-increment
+ *   alpha[.N]         alpha channel; same semantics as beta
+ *   <anything-else>   tag channel — version becomes `0.0.0-<sanitized>`,
+ *                     skips git commit/tag/GitHub Release. Explicit
+ *                     semver-shaped values (e.g. `2.0.0-experimental.1`)
+ *                     are REJECTED — pass just the tag name.
  *
  * Examples:
- *   bun .../bump.ts release patch
- *   bun .../bump.ts release 2.1.0
- *   bun .../bump.ts beta
- *   bun .../bump.ts beta 15
- *   bun .../bump.ts alpha
- *   bun .../bump.ts tag 2.0.0-experimental.1
+ *   bun .../bump.ts                            # auto beta
+ *   bun .../bump.ts patch                      # release 2.0.0 -> 2.0.1
+ *   bun .../bump.ts 2.1.0                      # release explicit
+ *   bun .../bump.ts beta                       # next beta
+ *   bun .../bump.ts beta.15                    # forced beta.15
+ *   bun .../bump.ts alpha                      # next alpha
+ *   bun .../bump.ts experimental               # tag → 0.0.0-experimental
+ *   bun .../bump.ts my-feature                 # tag → 0.0.0-my-feature
  */
 import { $ } from "bun";
 import { readFile, writeFile } from "node:fs/promises";
@@ -65,17 +66,62 @@ if (PUBLISHABLE_DIRS.length !== PUBLISHABLE_NAMES.length) {
 
 type Channel = "release" | "beta" | "alpha" | "tag";
 
-const CHANNELS: readonly Channel[] = ["release", "beta", "alpha", "tag"];
+type Plan =
+  | { channel: "release"; spec: string } // "patch" | "minor" | "major" | "x.y.z"
+  | { channel: "beta" | "alpha"; spec?: string } // undefined = auto; "N" = forced
+  | { channel: "tag"; name: string }; // becomes 0.0.0-<name>
 
 function usage(): never {
   console.error(
     "Usage:\n" +
-      "  bun bump.ts release <patch|minor|major|x.y.z>\n" +
-      "  bun bump.ts beta [N]\n" +
-      "  bun bump.ts alpha [N]\n" +
-      "  bun bump.ts tag <version>",
+      "  bun bump.ts                  # next beta (auto-increment)\n" +
+      "  bun bump.ts patch|minor|major\n" +
+      "  bun bump.ts 1.2.3            # explicit release\n" +
+      "  bun bump.ts beta[.N]\n" +
+      "  bun bump.ts alpha[.N]\n" +
+      "  bun bump.ts <tag-name>       # tag release → 0.0.0-<tag-name>",
   );
   process.exit(1);
+}
+
+function parseInput(input: string): Plan {
+  // Empty == auto beta. Matches the "beta cut" default in the workflow UI.
+  if (input === "" || input === "beta") return { channel: "beta" };
+  if (input === "alpha") return { channel: "alpha" };
+
+  let m = input.match(/^beta\.(\d+)$/);
+  if (m) return { channel: "beta", spec: m[1] };
+  m = input.match(/^alpha\.(\d+)$/);
+  if (m) return { channel: "alpha", spec: m[1] };
+
+  if (input === "patch" || input === "minor" || input === "major") {
+    return { channel: "release", spec: input };
+  }
+  if (/^\d+\.\d+\.\d+$/.test(input)) {
+    return { channel: "release", spec: input };
+  }
+
+  // Tag channel — reject anything that LOOKS like a version. The
+  // contract is `0.0.0-<name>`; if you want an experimental release,
+  // pass just `experimental` (or `experimental-1`), never
+  // `2.0.0-experimental` or `0.0.0-experimental`.
+  if (/^\d+\.\d+\.\d+/.test(input)) {
+    console.error(
+      `Invalid version '${input}'. Tag releases are always 0.0.0-<name> — ` +
+        "pass just the tag name (e.g. 'experimental' or 'my-feature'), not a semver string.",
+    );
+    process.exit(1);
+  }
+  // npm prerelease identifiers (per semver) are [0-9A-Za-z-] dot-segments.
+  // We additionally require it to start with a letter so it can't be
+  // mistaken for a version-shaped string and stays human-readable.
+  if (!/^[a-zA-Z][a-zA-Z0-9.-]*$/.test(input)) {
+    console.error(
+      `Invalid tag name '${input}'. Must start with a letter and contain only [A-Za-z0-9.-].`,
+    );
+    process.exit(1);
+  }
+  return { channel: "tag", name: input };
 }
 
 async function fetchNpmVersions(pkg: string): Promise<string[]> {
@@ -229,32 +275,27 @@ async function resolvePrerelease(
   return `${CURRENT_MAJOR_MINOR_PATCH}-${channel}.${nextN}`;
 }
 
-function resolveTag(spec: string | undefined): string {
-  if (!spec) {
-    console.error(
-      "tag channel requires an explicit version (e.g. 2.0.0-experimental.1)",
-    );
-    process.exit(1);
-  }
-  if (!/^\d+\.\d+\.\d+-[\w.-]+$/.test(spec)) {
-    console.error(
-      `tag channel version must be x.y.z-<suffix> (always a pre-release); got: ${spec}`,
-    );
-    process.exit(1);
-  }
-  console.error(`Using tag version: ${spec}`);
-  return spec;
+function resolveTag(name: string): string {
+  const version = `0.0.0-${name}`;
+  console.error(`Tag release: ${version}`);
+  return version;
 }
 
-const channel = process.argv[2] as Channel | undefined;
-const spec = process.argv[3];
-
-if (!channel || !CHANNELS.includes(channel)) {
+if (process.argv.length > 3) {
+  console.error("Too many arguments — bump.ts takes a single version spec.");
   usage();
 }
 
+const input = (process.argv[2] ?? "").trim();
+const plan = parseInput(input);
+
+let channel: Channel = plan.channel;
 let newVersion: string;
 
+// Durability: if HEAD is already at an exact release tag (a previous
+// attempt committed+tagged but failed before npm publish), reuse that
+// version instead of computing a new one. Skipped for `tag` — those
+// releases are intentionally uncommitted/ephemeral.
 const headTagVersion = channel !== "tag" ? await getHeadTagVersion() : null;
 if (headTagVersion) {
   console.error(
@@ -262,16 +303,16 @@ if (headTagVersion) {
   );
   newVersion = headTagVersion;
 } else {
-  switch (channel) {
+  switch (plan.channel) {
     case "release":
-      newVersion = await resolveRelease(spec);
+      newVersion = await resolveRelease(plan.spec);
       break;
     case "beta":
     case "alpha":
-      newVersion = await resolvePrerelease(channel, spec);
+      newVersion = await resolvePrerelease(plan.channel, plan.spec);
       break;
     case "tag":
-      newVersion = resolveTag(spec);
+      newVersion = resolveTag(plan.name);
       break;
   }
 }
@@ -286,4 +327,5 @@ for (const dir of PUBLISHABLE_DIRS) {
 console.error("Running bun install to refresh bun.lock workspace versions...");
 await $`bun install`.quiet();
 
-console.log(newVersion);
+console.log(`channel=${channel}`);
+console.log(`version=${newVersion}`);

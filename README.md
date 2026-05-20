@@ -14,6 +14,21 @@ Bump versions across a set of publishable workspace packages, commit + tag,
 publish to npm with OIDC trusted publishing **in dependency-graph order
 (waves)**, then cut a GitHub Release and notify Discord.
 
+**Single `version` input** describes what to publish; the channel is
+inferred from its shape:
+
+| Input               | Channel  | Result                                     |
+| ------------------- | -------- | ------------------------------------------ |
+| `""` (empty)        | beta     | Next beta from npm (auto-increment)        |
+| `patch`/`minor`/`major` | release  | Bump current max stable                |
+| `1.2.3`             | release  | Explicit stable version                    |
+| `beta` / `beta.N`   | beta     | Next or forced beta on `<current-version>` |
+| `alpha` / `alpha.N` | alpha    | Same for alpha                             |
+| `<tag-name>`        | tag      | Version becomes `0.0.0-<tag-name>`; **no** git commit, tag, or GitHub Release |
+
+Tag releases always use `0.0.0-<name>` — semver-shaped tag specs like
+`2.0.0-experimental` are rejected. Pass just the name.
+
 Publish order is derived automatically from each `package.json`'s
 `workspace:*` deps that point at other publishables. A wave is the set of
 packages that don't depend on each other — those publish in parallel.
@@ -61,8 +76,7 @@ jobs:
   release:
     uses: alchemy-run/actions/.github/workflows/release.yml@main
     with:
-      channel: ${{ inputs.channel }}
-      spec: ${{ inputs.spec }}
+      version: ${{ inputs.version }}
       repo: alchemy-run/alchemy-effect
       current-version: "2.0.0"
       packages: |

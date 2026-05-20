@@ -7,32 +7,21 @@ name: Release NPM Package
 on:
   workflow_dispatch:
     inputs:
-      channel:
-        description: "Release channel"
-        required: true
-        type: choice
-        default: beta
-        options:
-          - release
-          - beta
-          - alpha
-          - tag
-      spec:
+      version:
         description: >-
-          Channel-specific value. tag: REQUIRED, the explicit full version
-          (e.g. 2.0.0-experimental.1). release: REQUIRED,
-          patch|minor|major or an explicit x.y.z. beta|alpha: optional, an
-          integer N to force <current-version>-<channel>.N; leave blank
-          to auto-increment.
+          Release spec. Empty = next beta. `patch|minor|major` or `x.y.z`
+          for a stable release. `beta` / `beta.N` / `alpha` / `alpha.N`
+          for a prerelease. Anything else = tag release on
+          `0.0.0-<name>`.
         required: false
         type: string
+        default: ""
 
 jobs:
   release:
     uses: alchemy-run/actions/.github/workflows/release.yml@main
     with:
-      channel: ${{ inputs.channel }}
-      spec: ${{ inputs.spec }}
+      version: ${{ inputs.version }}
       repo: alchemy-run/alchemy-effect
       current-version: "2.0.0"
       packages: |
