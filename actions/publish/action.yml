@@ -1,5 +1,5 @@
 name: Publish one package
-description: Checkout the consumer at the release SHA, download bump-files, and publish one package to npm via the shared publish-package.ts.
+description: Checkout the consumer at the release SHA, download bump-files, optionally build, and publish one package to npm via the shared publish-package.ts.
 
 inputs:
   ref:
@@ -20,6 +20,13 @@ inputs:
   names-json:
     description: JSON array of ALL publishable names (parallel to dirs-json)
     required: true
+  build-command:
+    description: >-
+      Optional build command, run in the package's own `dir`. Used when
+      the release workflow is configured with `build-mode: per-package`
+      so the build doesn't have to fit on the bump job's runner.
+    required: false
+    default: ""
   node-version:
     description: Node version
     required: false
@@ -57,6 +64,12 @@ runs:
       shell: bash
       working-directory: .alchemy-actions
       run: bun install
+
+    - name: Build ${{ inputs.dir }}
+      if: inputs.build-command != ''
+      shell: bash
+      working-directory: ${{ inputs.dir }}
+      run: ${{ inputs.build-command }}
 
     - name: Publish
       shell: bash

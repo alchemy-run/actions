@@ -41,13 +41,32 @@ on:
         type: string
       packages:
         description: >-
-          JSON array of `{ "dir": "...", "name": "..." }` objects, one per
-          publishable workspace package. Publish order is computed from
-          each package.json's workspace deps — array order doesn't matter.
+          JSON array of `{ "dir": "...", "name": "...", "runner": "..." }`
+          objects, one per publishable workspace package. `runner` is
+          optional (defaults to `ubuntu-latest`) and overrides the
+          GitHub runner used for that package's publish job. Publish
+          order is computed from each package.json's workspace deps —
+          array order doesn't matter.
         required: true
         type: string
+      build-mode:
+        description: >-
+          When to build:
+            `up-front`    — one global build in the bump job (faster
+                            overall when packages share build state but
+                            requires every package to fit on one runner).
+            `per-package` — each publish job builds its own package in
+                            its own dir (use this when total build is
+                            too large for one runner, or when you want
+                            larger runners for specific packages).
+        required: false
+        type: string
+        default: up-front
       build-command:
-        description: "Build command run by the bump job before publishing"
+        description: >-
+          Build command. In `up-front` mode it runs once at the repo
+          root in the bump job; in `per-package` mode it runs inside
+          each package's own dir from each publish-wave matrix job.
         required: false
         type: string
         default: "bun run build:packages"
@@ -138,31 +157,40 @@ jobs:
             | tee -a "$GITHUB_OUTPUT"
 
       # Compute waves AFTER bump so the package.json reads see the
-      # freshly-written workspace versions (not strictly required for the
-      # DAG itself, but keeps the script self-consistent if it ever
-      # starts looking at versions).
+      # freshly-written workspace versions (not strictly required for
+      # the DAG itself, but keeps the script self-consistent). Pass the
+      # full PACKAGES_JSON so per-package `runner` and any other fields
+      # ride into the wave outputs.
       - id: waves
         env:
-          ALCHEMY_PUBLISHABLE_DIRS: ${{ steps.parse.outputs.dirs }}
-          ALCHEMY_PUBLISHABLE_NAMES: ${{ steps.parse.outputs.names }}
+          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
         run: |
           set -euo pipefail
           out=$(bun "$ACTIONS_DIR/scripts/release/compute-waves.ts")
           echo "Computed publish DAG:"
-          echo "$out" | grep '^wave[1-5]='
+          echo "$out"
           echo "$out" >> "$GITHUB_OUTPUT"
 
       - name: Build packages
+        if: inputs.build-mode == 'up-front'
         run: ${{ inputs.build-command }}
 
       - id: artifact-paths
         env:
           DIRS: ${{ steps.parse.outputs.dirs }}
+          BUILD_MODE: ${{ inputs.build-mode }}
         run: |
           set -euo pipefail
-          PATHS=$(printf '%s' "$DIRS" | jq -r '
-            .[] as $d
-            | "\($d)/package.json", "\($d)/lib", "\($d)/bin"')
+          # Always include package.jsons + lockfile. Add lib/bin only
+          # when we built up-front so per-package mode doesn't try to
+          # upload nonexistent dirs.
+          if [ "$BUILD_MODE" = "up-front" ]; then
+            PATHS=$(printf '%s' "$DIRS" | jq -r '
+              .[] as $d
+              | "\($d)/package.json", "\($d)/lib", "\($d)/bin"')
+          else
+            PATHS=$(printf '%s' "$DIRS" | jq -r '.[] as $d | "\($d)/package.json"')
+          fi
           PATHS="${PATHS}
           bun.lock"
           {
@@ -281,7 +309,7 @@ jobs:
       (needs.commit-and-tag.result == 'success' ||
        needs.commit-and-tag.result == 'skipped') &&
       needs.bump.outputs.wave1 != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.package.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -300,6 +328,7 @@ jobs:
           channel: ${{ needs.bump.outputs.channel }}
           dirs-json: ${{ needs.bump.outputs.dirs }}
           names-json: ${{ needs.bump.outputs.names }}
+          build-command: ${{ inputs.build-mode == 'per-package' && inputs.build-command || '' }}
           node-version: ${{ inputs.node-version }}
 
   publish-wave-2:
@@ -311,7 +340,7 @@ jobs:
       (needs.publish-wave-1.result == 'success' ||
        needs.publish-wave-1.result == 'skipped') &&
       needs.bump.outputs.wave2 != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.package.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -330,6 +359,7 @@ jobs:
           channel: ${{ needs.bump.outputs.channel }}
           dirs-json: ${{ needs.bump.outputs.dirs }}
           names-json: ${{ needs.bump.outputs.names }}
+          build-command: ${{ inputs.build-mode == 'per-package' && inputs.build-command || '' }}
           node-version: ${{ inputs.node-version }}
 
   # ── Step 4: Create GitHub Release and notify Discord. ──

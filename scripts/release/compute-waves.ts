@@ -10,39 +10,67 @@
  * any entry with a `workspace:*`-style value pointing at a sibling that
  * is itself in the publish set adds an edge.
  *
- * Output: one line of JSON per wave to stdout, plus a single combined
- * JSON 2D array on the final line. The workflow consumes the combined
- * line as a job output.
+ * Output: `wave1=...` / `wave2=...` lines on stdout in `key=value` form
+ * so the workflow can pipe straight into `$GITHUB_OUTPUT`. Each wave
+ * item carries the original config object verbatim — `dir`, `name`,
+ * and any caller-supplied extras (`runner`, etc.).
  *
  *   $ bun compute-waves.ts
- *   wave1=[{"dir":"packages/core","name":"@x/core"}]
- *   wave2=[{"dir":"packages/aws","name":"@x/aws"},{"dir":"packages/cf","name":"@x/cf"}]
- *   waves=[[{...}],[{...},{...}]]
+ *   wave1=[{"dir":"packages/core","name":"@x/core","runner":"ubuntu-latest"}]
+ *   wave2=[{"dir":"packages/aws","name":"@x/aws","runner":"ubuntu-22-large"}, ...]
  *
  * Errors out (non-zero exit) if the graph has a cycle or exceeds two
  * levels (every project we currently release fits in 2 waves — anchor
  * + everything-else; if you genuinely need a third, bump MAX_WAVES
  * here and add a matching publish-wave-3 job to release.yml).
  *
- * Reads ALCHEMY_PUBLISHABLE_DIRS / ALCHEMY_PUBLISHABLE_NAMES.
+ * Reads ALCHEMY_PUBLISHABLE_PACKAGES (full JSON array of objects with
+ * at least `dir` and `name`). Defaults `runner` to "ubuntu-latest" on
+ * each item if unset.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { publishableDirs, publishableNames } from "./config.ts";
 
 const MAX_WAVES = 2;
 
-const dirs = publishableDirs();
-const names = publishableNames();
-if (dirs.length !== names.length) {
+type Package = {
+  dir: string;
+  name: string;
+  runner?: string;
+  [key: string]: unknown;
+};
+
+const raw = process.env.ALCHEMY_PUBLISHABLE_PACKAGES;
+if (!raw || !raw.trim()) {
+  console.error("Required env var ALCHEMY_PUBLISHABLE_PACKAGES is unset or empty");
+  process.exit(1);
+}
+let parsed: unknown;
+try {
+  parsed = JSON.parse(raw);
+} catch (e) {
   console.error(
-    "ALCHEMY_PUBLISHABLE_DIRS and ALCHEMY_PUBLISHABLE_NAMES must be parallel arrays",
+    `ALCHEMY_PUBLISHABLE_PACKAGES is not valid JSON: ${(e as Error).message}`,
+  );
+  process.exit(1);
+}
+if (
+  !Array.isArray(parsed) ||
+  !parsed.every(
+    (p) =>
+      p && typeof p === "object" && typeof p.dir === "string" && typeof p.name === "string",
+  )
+) {
+  console.error(
+    "ALCHEMY_PUBLISHABLE_PACKAGES must be a JSON array of `{ dir, name, ... }` objects",
   );
   process.exit(1);
 }
 
-type Package = { dir: string; name: string };
-const packages: Package[] = dirs.map((dir, i) => ({ dir, name: names[i]! }));
+const packages: Package[] = (parsed as Package[]).map((p) => ({
+  ...p,
+  runner: p.runner ?? "ubuntu-latest",
+}));
 const nameToPackage = new Map(packages.map((p) => [p.name, p]));
 
 const DEP_SECTIONS = [
@@ -124,9 +152,6 @@ for (const pkg of packages) {
   waves[wave.get(pkg.name)! - 1]!.push(pkg);
 }
 
-const lines: string[] = [];
 waves.forEach((w, i) => {
-  lines.push(`wave${i + 1}=${JSON.stringify(w)}`);
+  console.log(`wave${i + 1}=${JSON.stringify(w)}`);
 });
-lines.push(`waves=${JSON.stringify(waves)}`);
-console.log(lines.join("\n"));

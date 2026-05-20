@@ -29,6 +29,23 @@ inferred from its shape:
 Tag releases always use `0.0.0-<name>` — semver-shaped tag specs like
 `2.0.0-experimental` are rejected. Pass just the name.
 
+**Build modes.** `build-mode: up-front` (default) builds every package
+once at the start of the bump job and ships `lib/`/`bin/` as part of
+the `bump-files` artifact — fastest when the whole workspace fits on
+one runner. `build-mode: per-package` skips that, and each publish job
+builds its own package inside the package's dir before packing. Use
+per-package when the full build doesn't fit on a single runner or when
+you want to route specific packages to bigger runners (see `runner:`
+below).
+
+**Per-package config** (in the `packages:` JSON array):
+
+| Field    | Default          | Purpose                                                    |
+| -------- | ---------------- | ---------------------------------------------------------- |
+| `dir`    | —                | Workspace path (e.g. `packages/aws`)                       |
+| `name`   | —                | npm package name (used for the workspace-dep graph)        |
+| `runner` | `ubuntu-latest`  | GitHub runner used for that package's publish job          |
+
 Publish order is derived automatically from each `package.json`'s
 `workspace:*` deps that point at other publishables. A wave is the set of
 packages that don't depend on each other — those publish in parallel.
