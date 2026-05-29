@@ -223,6 +223,19 @@ jobs:
         working-directory: ${{ matrix.package.dir }}
         run: ${{ inputs.build-command }}
 
+      # Rewrite `workspace:*` deps to point at the SAME branch's
+      # pr-package tarball for the matching sibling. Without this,
+      # `bun pm pack` resolves `workspace:*` to whatever sibling
+      # version is in bun.lock — i.e. the last npm release — so
+      # consuming this tarball pulls a stale dep from npm instead of
+      # the pr-package we just published from the same commit.
+      - name: Pin sibling workspace deps to pr-package URLs
+        env:
+          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
+          ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
+          ALCHEMY_PR_TAG: ${{ needs.tags.outputs.short }}
+        run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ matrix.package.dir }}"
+
       - name: Publish ${{ matrix.package.name }}
         env:
           PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
