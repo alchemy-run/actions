@@ -120,20 +120,25 @@ jobs:
           export ALCHEMY_PUBLISHABLE_DIRS="$DIRS"
           export ALCHEMY_PUBLISHABLE_NAMES="$NAMES"
 
-          if [ "$FORCE_LABEL_PRESENT" = "true" ]; then
-            echo "force-ci label present — rebuilding every package."
+          # Push to main + force-ci label both republish the full set.
+          # On push, main is the canonical state — partial publishes
+          # risk drift between sibling tarballs at the same SHA. On a
+          # PR, the diff-driven path narrows the matrix, then expands
+          # back to include every transitive workspace dep so the URL
+          # rewriter has a same-SHA tarball to point at.
+          if [ "$EVENT" = "push" ] || [ "$FORCE_LABEL_PRESENT" = "true" ]; then
+            if [ "$EVENT" = "push" ]; then
+              echo "Push event — rebuilding every package."
+            else
+              echo "force-ci label present — rebuilding every package."
+            fi
             ALL=$(printf '%s' "$PACKAGES_JSON" | jq -c '.')
             echo "changed=$ALL" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [ "$EVENT" = "pull_request" ]; then
-            FROM="$BASE_SHA"
-            TO="$HEAD_SHA"
-          else
-            FROM="${HEAD_SHA}~1"
-            TO="$HEAD_SHA"
-          fi
+          FROM="$BASE_SHA"
+          TO="$HEAD_SHA"
 
           echo "Diffing $FROM..$TO"
           DIFF=$(git diff --name-only "$FROM" "$TO")

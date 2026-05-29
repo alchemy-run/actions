@@ -124,16 +124,41 @@ let changed: Pkg[];
 if (rebuildAll) {
   changed = packages;
 } else {
-  // For each package, affected if any changed file lives under itself
-  // or under one of its transitive workspace deps.
-  changed = packages.filter((pkg) => {
-    const affectedDirs = [...close(pkg.name)].map(
-      (n) => nameToPkg.get(n)!.dir,
-    );
-    return changedFiles.some((f) =>
-      affectedDirs.some((d) => f === d || f.startsWith(d + "/")),
-    );
-  });
+  // Step 1 — packages whose own dir was touched.
+  const directlyTouched = new Set(
+    packages
+      .filter((pkg) =>
+        changedFiles.some(
+          (f) => f === pkg.dir || f.startsWith(pkg.dir + "/"),
+        ),
+      )
+      .map((p) => p.name),
+  );
+
+  // Step 2 — anyone that depends on a directly-touched package needs
+  // a rebuild too (their build output may change).
+  const needsRebuild = new Set(directlyTouched);
+  for (const pkg of packages) {
+    for (const dep of close(pkg.name)) {
+      if (directlyTouched.has(dep)) {
+        needsRebuild.add(pkg.name);
+        break;
+      }
+    }
+  }
+
+  // Step 3 — every transitive workspace dep of a package we're
+  // rebuilding ALSO needs to be in the publish set so the pr-package
+  // URL rewriter has a same-SHA tarball to point at. Without this
+  // step, a PR that only touches `packages/cloudflare/` would publish
+  // a cloudflare tarball whose rewritten `core` dep points at a URL
+  // that was never uploaded.
+  const finalSet = new Set(needsRebuild);
+  for (const name of needsRebuild) {
+    for (const dep of close(name)) finalSet.add(dep);
+  }
+
+  changed = packages.filter((p) => finalSet.has(p.name));
 }
 
 console.log(
