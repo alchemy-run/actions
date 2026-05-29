@@ -113,12 +113,22 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Normalise every package entry up front so every downstream
+          # job (matrix `runs-on`, the rewrite script, the upload curl)
+          # sees the same shape regardless of whether the user supplied
+          # `project`/`install`/`runner` explicitly.
+          PACKAGES_FULL=$(printf '%s' "$PACKAGES_JSON" | jq -c '
+            map({ dir,
+                  name,
+                  project: (.project // .name),
+                  install: (.install // .project // .name),
+                  runner:  (.runner  // "ubuntu-latest") })')
+
           if [ "$EVENT" = "push" ] || [ "$FORCE_LABEL_PRESENT" = "true" ]; then
             [ "$EVENT" = "push" ] \
               && echo "Push event — rebuilding every package." \
               || echo "force-ci label present — rebuilding every package."
-            ALL=$(printf '%s' "$PACKAGES_JSON" | jq -c '.')
-            echo "changed=$ALL" | tee -a "$GITHUB_OUTPUT"
+            echo "changed=$PACKAGES_FULL" | tee -a "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -127,8 +137,8 @@ jobs:
           echo "Changed files:"
           printf '  %s\n' $DIFF || true
 
-          DIRS=$(printf '%s' "$PACKAGES_JSON" | jq -c '[.[].dir]')
-          NAMES=$(printf '%s' "$PACKAGES_JSON" | jq -c '[.[].name]')
+          DIRS=$(printf '%s' "$PACKAGES_FULL" | jq -c '[.[].dir]')
+          NAMES=$(printf '%s' "$PACKAGES_FULL" | jq -c '[.[].name]')
 
           AFFECTED=$(printf '%s\n' "$DIFF" \
             | env ALCHEMY_PUBLISHABLE_DIRS="$DIRS" \
@@ -136,20 +146,14 @@ jobs:
                   bun "$ACTIONS_DIR/scripts/release/compute-changed.ts")
           echo "compute-changed result: $AFFECTED"
 
-          # Re-attach `project`/`install`/`runner` from the original
-          # PACKAGES_JSON to each affected entry.
+          # Re-attach the normalised config (project/install/runner) to
+          # each affected entry.
           MATRIX=$(jq -nc \
-            --argjson packages "$PACKAGES_JSON" \
+            --argjson packages "$PACKAGES_FULL" \
             --argjson affected "$AFFECTED" '
               ($packages | map({ key: .dir, value: . }) | from_entries) as $byDir
               | $affected.changed
-              | map(. as $a
-                    | ($byDir[$a.dir] // {}) as $cfg
-                    | { dir: $a.dir,
-                        name: $a.name,
-                        project: ($cfg.project // $a.name),
-                        install: ($cfg.install // $cfg.project // $a.name),
-                        runner:  ($cfg.runner  // "ubuntu-latest") })')
+              | map($byDir[.dir])')
           echo "changed=$MATRIX" | tee -a "$GITHUB_OUTPUT"
 
   # ── Step 2: compute install/CDN tags + the publish DAG. ─────────────
