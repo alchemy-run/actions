@@ -81,9 +81,14 @@ jobs:
   # push / force-ci → full set. PR → diff-driven subset with
   # transitive workspace-dep closure.
   detect-changes:
+    # Skip fork PRs entirely — they can't access PR_PACKAGE_TOKEN or
+    # the alchemy-version-bot secrets, so every downstream step would
+    # error before doing anything useful. Internal PRs and pushes to
+    # main behave as before.
     if: >-
       github.event_name == 'push' ||
-      (github.event_name == 'pull_request' && github.event.action != 'closed')
+      (github.event_name == 'pull_request' && github.event.action != 'closed' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.compute.outputs.changed }}
@@ -376,7 +381,9 @@ jobs:
 
   # ── Cleanup on PR close (merged or not). ────────────────────────────
   cleanup:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    if: >-
+      github.event_name == 'pull_request' && github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Delete tags
