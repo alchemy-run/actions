@@ -303,6 +303,7 @@ jobs:
   # shape, no deeper. If you genuinely need depth ≥ 3, bump MAX_WAVES
   # in compute-waves.ts and add publish-wave-3 (… etc.) here.
   publish-wave-1:
+    name: wave-1 / ${{ matrix.package.name }}
     needs: [bump, commit-and-tag]
     if: >-
       always() && needs.bump.result == 'success' &&
@@ -332,6 +333,7 @@ jobs:
           node-version: ${{ inputs.node-version }}
 
   publish-wave-2:
+    name: wave-2 / ${{ matrix.package.name }}
     needs: [bump, commit-and-tag, publish-wave-1]
     if: >-
       always() && needs.bump.result == 'success' &&

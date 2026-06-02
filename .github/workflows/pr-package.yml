@@ -207,6 +207,7 @@ jobs:
 
   # ── Step 3: publish in waves. Same shape as release.yml. ────────────
   publish-wave-1:
+    name: wave-1 / ${{ matrix.package.name }}
     needs: [detect-changes, plan]
     if: needs.plan.outputs.wave1 != '[]'
     runs-on: ${{ matrix.package.runner }}
@@ -261,6 +262,7 @@ jobs:
             --data-binary "@${tgz}"
 
   publish-wave-2:
+    name: wave-2 / ${{ matrix.package.name }}
     needs: [detect-changes, plan, publish-wave-1]
     if: >-
       always() && needs.plan.result == 'success' &&
