@@ -118,9 +118,9 @@ every leaf that depends on it. A `force-ci` PR label overrides and
 rebuilds everything; touching `bun.lock`, root `package.json`, or this
 workflow's yaml also rebuilds everything.
 
-**Cleanup on PR close.** Every tag we assigned for the PR (branch,
-`pr-N`, short SHA, long SHA) is deleted from every configured project
-so the underlying tarballs orphan and the bucket cleans them up.
+**PR close is a no-op.** Tags persist past PR close so install URLs
+keep resolving long-term — the pkg.ing bucket's TTL handles orphan
+cleanup on its own schedule.
 
 ```yaml
 # consumer .github/workflows/pr-package.yml

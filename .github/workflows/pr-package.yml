@@ -11,8 +11,10 @@ name: pr-package (reusable)
 #                                       expanded so the workspace-dep
 #                                       URL rewriter has a same-SHA
 #                                       tarball to point at
-#   - pull_request.closed             → delete every tag we ever
-#                                       assigned for this PR
+#   - pull_request.closed             → no-op. pr-package tags persist
+#                                       past PR close so install URLs
+#                                       keep resolving; the bucket's
+#                                       TTL handles orphan cleanup.
 #
 # Inside each wave: build the package (in its own dir), rewrite
 # `workspace:*` deps to pr-package URLs at the same SHA, pack, upload.
@@ -379,44 +381,6 @@ jobs:
             gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY"
           fi
 
-  # ── Cleanup on PR close (merged or not). ────────────────────────────
-  cleanup:
-    if: >-
-      github.event_name == 'pull_request' && github.event.action == 'closed' &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    steps:
-      - name: Delete tags
-        env:
-          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
-          TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BRANCH: ${{ github.event.pull_request.head.ref }}
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PACKAGES_JSON: ${{ inputs.packages }}
-        run: |
-          set -euo pipefail
-          shas=$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/commits" --jq '.[].sha')
-
-          tags=()
-          while IFS= read -r sha; do
-            [ -z "$sha" ] && continue
-            tags+=("$sha" "${sha:0:7}")
-          done <<< "$shas"
-          tags+=("$BRANCH" "pr-${PR_NUMBER}")
-          unique=$(printf '%s\n' "${tags[@]}" | sort -u)
-
-          projects=$(printf '%s' "$PACKAGES_JSON" | jq -r '.[] | (.project // .name)')
-
-          while IFS= read -r project; do
-            [ -z "$project" ] && continue
-            while IFS= read -r tag; do
-              [ -z "$tag" ] && continue
-              encoded=$(jq -rn --arg t "$tag" '$t|@uri')
-              code=$(curl -sS -o /dev/null -w "%{http_code}" -X DELETE \
-                "https://${PR_PACKAGE_HOST}/projects/${project}/tags/${encoded}" \
-                -H "Authorization: Bearer ${TOKEN}")
-              echo "DELETE ${project}:${tag} → ${code}"
-            done <<< "$unique"
-          done <<< "$projects"
+  # PR close intentionally does nothing — pr-package tags persist past
+  # PR close so existing install URLs keep resolving. The bucket's TTL
+  # handles orphan cleanup on its own schedule.
