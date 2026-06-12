@@ -70,6 +70,25 @@ on:
         required: false
         type: string
         default: force-ci
+      submodules:
+        description: >-
+          Passed through to actions/checkout's `submodules` for the
+          consumer checkouts in the publish jobs (`false` | `true` |
+          `recursive`). Needed when the consumer's bun workspace
+          includes packages from a submodule.
+        required: false
+        type: string
+        default: "false"
+      rebuild-all-paths:
+        description: >-
+          Newline-separated paths appended to compute-changed's default
+          rebuild-all globs (`bun.lock`, root `package.json`, …). A PR
+          touching any of them republishes every package. Use for
+          submodule pointers (e.g. `distilled`) whose changes don't
+          fall under any package dir.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -117,6 +136,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           FORCE_LABEL_PRESENT: ${{ contains(github.event.pull_request.labels.*.name, inputs.force-ci-label) }}
           PACKAGES_JSON: ${{ inputs.packages }}
+          ALCHEMY_PR_REBUILD_ALL_GLOBS: ${{ inputs.rebuild-all-paths }}
         run: |
           set -euo pipefail
 
@@ -224,6 +244,8 @@ jobs:
         package: ${{ fromJson(needs.plan.outputs.wave1) }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: ${{ inputs.submodules }}
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -283,6 +305,8 @@ jobs:
         package: ${{ fromJson(needs.plan.outputs.wave2) }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: ${{ inputs.submodules }}
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

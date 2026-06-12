@@ -31,6 +31,13 @@ inputs:
     description: Node version
     required: false
     default: "24"
+  submodules:
+    description: >-
+      Passed through to actions/checkout's `submodules` for the consumer
+      checkout (`false` | `true` | `recursive`). Needed when the
+      consumer's bun workspace includes packages from a submodule.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -38,6 +45,7 @@ runs:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
         ref: ${{ inputs.ref }}
+        submodules: ${{ inputs.submodules }}
 
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:

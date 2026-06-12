@@ -82,6 +82,15 @@ on:
         required: false
         type: string
         default: main
+      submodules:
+        description: >-
+          Passed through to actions/checkout's `submodules` for every
+          consumer checkout (`false` | `true` | `recursive`). Needed
+          when the consumer's bun workspace includes packages from a
+          submodule.
+        required: false
+        type: string
+        default: "false"
 
 permissions:
   contents: write
@@ -114,6 +123,7 @@ jobs:
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0
+          submodules: ${{ inputs.submodules }}
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -229,6 +239,7 @@ jobs:
           ref: ${{ github.ref }}
           fetch-depth: 0
           token: ${{ steps.bot-token.outputs.token }}
+          submodules: ${{ inputs.submodules }}
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -331,6 +342,7 @@ jobs:
           names-json: ${{ needs.bump.outputs.names }}
           build-command: ${{ inputs.build-mode == 'per-package' && inputs.build-command || '' }}
           node-version: ${{ inputs.node-version }}
+          submodules: ${{ inputs.submodules }}
 
   publish-wave-2:
     name: wave-2 / ${{ matrix.package.name }}
@@ -363,6 +375,7 @@ jobs:
           names-json: ${{ needs.bump.outputs.names }}
           build-command: ${{ inputs.build-mode == 'per-package' && inputs.build-command || '' }}
           node-version: ${{ inputs.node-version }}
+          submodules: ${{ inputs.submodules }}
 
   # ── Step 4: Create GitHub Release and notify Discord. ──
   # Runs only when every non-empty publish wave succeeded.

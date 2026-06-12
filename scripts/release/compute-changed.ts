@@ -22,7 +22,8 @@
  * Reads ALCHEMY_PUBLISHABLE_DIRS / ALCHEMY_PUBLISHABLE_NAMES.
  *
  * Optional ALCHEMY_PR_REBUILD_ALL_GLOBS env var: newline-separated glob
- * prefixes that force rebuild-all when matched. Default:
+ * prefixes that force rebuild-all when matched, appended to the
+ * defaults:
  *
  *   bun.lock
  *   bun.lockb
@@ -98,10 +99,10 @@ const changedFiles = readFileSync(0, "utf-8")
   .map((l) => l.trim())
   .filter((l) => l.length > 0);
 
-const rebuildAllGlobs = (
-  process.env.ALCHEMY_PR_REBUILD_ALL_GLOBS?.split(/\r?\n/) ??
-  DEFAULT_REBUILD_ALL_GLOBS
-)
+const rebuildAllGlobs = [
+  ...DEFAULT_REBUILD_ALL_GLOBS,
+  ...(process.env.ALCHEMY_PR_REBUILD_ALL_GLOBS?.split(/\r?\n/) ?? []),
+]
   .map((g) => g.trim())
   .filter((g) => g.length > 0);
 
