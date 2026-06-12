@@ -3,10 +3,12 @@
  * Publish one workspace package to npm, idempotently.
  *
  * - Skips if {name}@{version} is already on the registry.
- * - Rewrites `workspace:*` in dependency sections to the concrete sibling
- *   version read from each configured publishable package's package.json.
- *   `bun pm pack`'s own substitution resolves `workspace:*` via bun.lock,
- *   which can lag behind a fresh version bump.
+ * - Rewrites `workspace:*` in dependency sections to a concrete version:
+ *   publishable siblings resolve to the (freshly bumped) version in their
+ *   package.json; other workspace members (e.g. submodule packages like
+ *   @distilled.cloud/*) resolve to the installed member's version via
+ *   node_modules. `bun pm pack`'s own substitution resolves `workspace:*`
+ *   via bun.lock, which can lag behind a fresh version bump.
  * - Selects the npm dist-tag based on the release channel:
  *     release → latest
  *     beta|alpha → next
@@ -80,6 +82,24 @@ if (existing.exitCode === 0 && existing.stdout.toString().trim().length > 0) {
   process.exit(0);
 }
 
+// Non-sibling workspace members (e.g. packages from a git submodule)
+// are symlinked into node_modules by `bun install` — sometimes the
+// package's own, sometimes the root's — and their package.json carries
+// the version that's expected to exist on npm. Walk node_modules from
+// the package dir up to the repo root.
+function workspaceMemberVersion(dep: string): string | undefined {
+  for (let dir = packageDir; ; dir = resolve(dir, "..")) {
+    const memberPkgPath = join(dir, "node_modules", dep, "package.json");
+    if (existsSync(memberPkgPath)) {
+      const member = JSON.parse(readFileSync(memberPkgPath, "utf-8")) as {
+        version?: string;
+      };
+      return member.version;
+    }
+    if (dir === repoRoot || resolve(dir, "..") === dir) return undefined;
+  }
+}
+
 const siblingVersions = new Map<string, string>();
 for (const dir of publishableDirs()) {
   const siblingPkgPath = join(repoRoot, dir, "package.json");
@@ -100,10 +120,10 @@ for (const section of DEP_SECTIONS) {
   for (const [dep, value] of Object.entries(deps)) {
     if (typeof value !== "string" || !value.startsWith("workspace:")) continue;
     const spec = value.slice("workspace:".length);
-    const concrete = siblingVersions.get(dep);
+    const concrete = siblingVersions.get(dep) ?? workspaceMemberVersion(dep);
     if (!concrete) {
       console.error(
-        `${name}: ${section}.${dep} is ${value} but no configured publishable package provides ${dep}`,
+        `${name}: ${section}.${dep} is ${value} but neither a configured publishable package nor an installed workspace member provides ${dep}`,
       );
       process.exit(1);
     }
