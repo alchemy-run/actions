@@ -13,7 +13,7 @@
  *
  * Channel → flags on the new release:
  *   release        prerelease=false, latest=true
- *   beta | alpha   if any true-stable release exists: prerelease=true, latest=false
+ *   beta|alpha|rc  if any true-stable release exists: prerelease=true, latest=false
  *                  else:                              prerelease=false, latest=true (masquerade)
  *   tag            prerelease=true, latest=false (always)
  *
@@ -25,8 +25,14 @@ import { $ } from "bun";
 import { generate } from "changelogithub";
 import { repo } from "./config.ts";
 
-type Channel = "release" | "beta" | "alpha" | "tag";
-const CHANNELS: readonly Channel[] = ["release", "beta", "alpha", "tag"];
+type Channel = "release" | "beta" | "alpha" | "rc" | "tag";
+const CHANNELS: readonly Channel[] = [
+  "release",
+  "beta",
+  "alpha",
+  "rc",
+  "tag",
+];
 
 function isStableTag(tag: string): boolean {
   return /^v?\d+\.\d+\.\d+$/.test(tag);
@@ -36,7 +42,7 @@ const tag = process.argv[2];
 const channel = process.argv[3] as Channel | undefined;
 if (!tag || !channel || !CHANNELS.includes(channel)) {
   console.error(
-    "Usage: bun github-release.ts <tag> <release|beta|alpha|tag>",
+    "Usage: bun github-release.ts <tag> <release|beta|alpha|rc|tag>",
   );
   process.exit(1);
 }

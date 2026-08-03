@@ -23,6 +23,7 @@ on:
             x.y.z                 explicit stable release
             beta | beta.N         next/forced beta on <current-version>
             alpha | alpha.N       next/forced alpha on <current-version>
+            rc | rc.N             next/forced release candidate
             <tag-name>            tag release → version `0.0.0-<tag-name>`
                                   (skips git commit/tag/GitHub Release)
 

@@ -11,7 +11,7 @@
  *   via bun.lock, which can lag behind a fresh version bump.
  * - Selects the npm dist-tag based on the release channel:
  *     release → latest
- *     beta|alpha → next
+ *     beta|alpha|rc → next
  *     tag → derived from the version's prerelease suffix (e.g.
  *           2.0.0-experimental.1 → experimental-1)
  *
@@ -40,7 +40,7 @@ type PackageJson = {
   optionalDependencies?: DepMap;
 };
 
-type Channel = "release" | "beta" | "alpha" | "tag";
+type Channel = "release" | "beta" | "alpha" | "rc" | "tag";
 
 const DEP_SECTIONS = [
   "dependencies",
@@ -49,13 +49,19 @@ const DEP_SECTIONS = [
   "optionalDependencies",
 ] as const satisfies readonly (keyof PackageJson)[];
 
-const CHANNELS: readonly Channel[] = ["release", "beta", "alpha", "tag"];
+const CHANNELS: readonly Channel[] = [
+  "release",
+  "beta",
+  "alpha",
+  "rc",
+  "tag",
+];
 
 const packageArg = process.argv[2];
 const channel = process.argv[3] as Channel | undefined;
 if (!packageArg || !channel || !CHANNELS.includes(channel)) {
   console.error(
-    "Usage: bun publish-package.ts <package-dir> <release|beta|alpha|tag>",
+    "Usage: bun publish-package.ts <package-dir> <release|beta|alpha|rc|tag>",
   );
   process.exit(1);
 }
@@ -160,7 +166,7 @@ const tarball = tarballs[0]!;
 const distTag =
   channel === "release"
     ? "latest"
-    : channel === "beta" || channel === "alpha"
+    : channel === "beta" || channel === "alpha" || channel === "rc"
       ? "next"
       : version.replace(/^\d+\.\d+\.\d+-/, "").replace(/\./g, "-");
 console.log(`Publishing tarball: ${tarball} (dist-tag: ${distTag})`);
