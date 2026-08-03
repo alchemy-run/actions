@@ -11,9 +11,13 @@
  *   via bun.lock, which can lag behind a fresh version bump.
  * - Selects the npm dist-tag based on the release channel:
  *     release → latest
- *     beta|alpha → next
+ *     beta|alpha|rc → next
  *     tag → derived from the version's prerelease suffix (e.g.
  *           2.0.0-experimental.1 → experimental-1)
+ *
+ * ALCHEMY_FORCE_LATEST=true overrides the dist-tag to `latest` — and,
+ * when {name}@{version} is already on the registry, moves the existing
+ * `latest` tag onto it instead of skipping.
  *
  * Usage: bun publish-package.ts <package-dir> <channel>
  *
@@ -40,7 +44,7 @@ type PackageJson = {
   optionalDependencies?: DepMap;
 };
 
-type Channel = "release" | "beta" | "alpha" | "tag";
+type Channel = "release" | "beta" | "alpha" | "rc" | "tag";
 
 const DEP_SECTIONS = [
   "dependencies",
@@ -49,13 +53,19 @@ const DEP_SECTIONS = [
   "optionalDependencies",
 ] as const satisfies readonly (keyof PackageJson)[];
 
-const CHANNELS: readonly Channel[] = ["release", "beta", "alpha", "tag"];
+const CHANNELS: readonly Channel[] = [
+  "release",
+  "beta",
+  "alpha",
+  "rc",
+  "tag",
+];
 
 const packageArg = process.argv[2];
 const channel = process.argv[3] as Channel | undefined;
 if (!packageArg || !channel || !CHANNELS.includes(channel)) {
   console.error(
-    "Usage: bun publish-package.ts <package-dir> <release|beta|alpha|tag>",
+    "Usage: bun publish-package.ts <package-dir> <release|beta|alpha|rc|tag>",
   );
   process.exit(1);
 }
@@ -74,10 +84,20 @@ const { name, version } = pkg;
 
 console.log(`--- Publishing ${name}@${version} (channel: ${channel}) ---`);
 
+const forceLatest = process.env.ALCHEMY_FORCE_LATEST === "true";
+
 const existing = await $`npm view ${`${name}@${version}`} version`
   .nothrow()
   .quiet();
 if (existing.exitCode === 0 && existing.stdout.toString().trim().length > 0) {
+  if (forceLatest) {
+    // The tarball is already on npm; all that's left is to move the tag.
+    console.log(
+      `${name}@${version} already published; forcing dist-tag latest`,
+    );
+    await $`npm dist-tag add ${`${name}@${version}`} latest`;
+    process.exit(0);
+  }
   console.log(`${name}@${version} already published, skipping`);
   process.exit(0);
 }
@@ -157,10 +177,11 @@ if (tarballs.length !== 1) {
 }
 const tarball = tarballs[0]!;
 
-const distTag =
-  channel === "release"
+const distTag = forceLatest
+  ? "latest"
+  : channel === "release"
     ? "latest"
-    : channel === "beta" || channel === "alpha"
+    : channel === "beta" || channel === "alpha" || channel === "rc"
       ? "next"
       : version.replace(/^\d+\.\d+\.\d+-/, "").replace(/\./g, "-");
 console.log(`Publishing tarball: ${tarball} (dist-tag: ${distTag})`);

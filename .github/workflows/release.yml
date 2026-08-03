@@ -23,6 +23,7 @@ on:
             x.y.z                 explicit stable release
             beta | beta.N         next/forced beta on <current-version>
             alpha | alpha.N       next/forced alpha on <current-version>
+            rc | rc.N             next/forced release candidate
             <tag-name>            tag release → version `0.0.0-<tag-name>`
                                   (skips git commit/tag/GitHub Release)
 
@@ -91,6 +92,15 @@ on:
         required: false
         type: string
         default: "false"
+      force-latest:
+        description: >-
+          Publish every package under npm's `latest` dist-tag, whatever
+          the channel — use to promote a prerelease (e.g. an rc) to
+          latest. If a version is already on the registry, its `latest`
+          tag is moved rather than the publish being skipped.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -340,6 +350,7 @@ jobs:
           channel: ${{ needs.bump.outputs.channel }}
           dirs-json: ${{ needs.bump.outputs.dirs }}
           names-json: ${{ needs.bump.outputs.names }}
+          force-latest: ${{ inputs.force-latest }}
           build-command: ${{ inputs.build-mode == 'per-package' && inputs.build-command || '' }}
           node-version: ${{ inputs.node-version }}
           submodules: ${{ inputs.submodules }}
@@ -373,6 +384,7 @@ jobs:
           channel: ${{ needs.bump.outputs.channel }}
           dirs-json: ${{ needs.bump.outputs.dirs }}
           names-json: ${{ needs.bump.outputs.names }}
+          force-latest: ${{ inputs.force-latest }}
           build-command: ${{ inputs.build-mode == 'per-package' && inputs.build-command || '' }}
           node-version: ${{ inputs.node-version }}
           submodules: ${{ inputs.submodules }}

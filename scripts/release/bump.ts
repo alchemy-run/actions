@@ -28,6 +28,7 @@
  *   patch|minor|major release channel, bumps from current max stable
  *   x.y.z             release channel, explicit
  *   beta[.N]          beta channel; with N, force; without, auto-increment
+ *   rc[.N]            release-candidate channel; same semantics as beta
  *   alpha[.N]         alpha channel; same semantics as beta
  *   <anything-else>   tag channel — version becomes `0.0.0-<sanitized>`,
  *                     skips git commit/tag/GitHub Release. Explicit
@@ -64,11 +65,11 @@ if (PUBLISHABLE_DIRS.length !== PUBLISHABLE_NAMES.length) {
   process.exit(1);
 }
 
-type Channel = "release" | "beta" | "alpha" | "tag";
+type Channel = "release" | "beta" | "alpha" | "rc" | "tag";
 
 type Plan =
   | { channel: "release"; spec: string } // "patch" | "minor" | "major" | "x.y.z"
-  | { channel: "beta" | "alpha"; spec?: string } // undefined = auto; "N" = forced
+  | { channel: "beta" | "alpha" | "rc"; spec?: string } // undefined = auto; "N" = forced
   | { channel: "tag"; name: string }; // becomes 0.0.0-<name>
 
 function usage(): never {
@@ -79,6 +80,7 @@ function usage(): never {
       "  bun bump.ts 1.2.3            # explicit release\n" +
       "  bun bump.ts beta[.N]\n" +
       "  bun bump.ts alpha[.N]\n" +
+      "  bun bump.ts rc[.N]\n" +
       "  bun bump.ts <tag-name>       # tag release → 0.0.0-<tag-name>",
   );
   process.exit(1);
@@ -88,11 +90,14 @@ function parseInput(input: string): Plan {
   // Empty == auto beta. Matches the "beta cut" default in the workflow UI.
   if (input === "" || input === "beta") return { channel: "beta" };
   if (input === "alpha") return { channel: "alpha" };
+  if (input === "rc") return { channel: "rc" };
 
   let m = input.match(/^beta\.(\d+)$/);
   if (m) return { channel: "beta", spec: m[1] };
   m = input.match(/^alpha\.(\d+)$/);
   if (m) return { channel: "alpha", spec: m[1] };
+  m = input.match(/^rc\.(\d+)$/);
+  if (m) return { channel: "rc", spec: m[1] };
 
   if (input === "patch" || input === "minor" || input === "major") {
     return { channel: "release", spec: input };
@@ -137,7 +142,7 @@ async function fetchNpmVersions(pkg: string): Promise<string[]> {
 
 function maxPrereleaseN(
   versions: readonly string[],
-  channel: "beta" | "alpha",
+  channel: "beta" | "alpha" | "rc",
 ): number {
   const re = new RegExp(`^${CURRENT_MAJOR_MINOR_PATCH}-${channel}\\.(\\d+)$`);
   const ns = versions
@@ -221,7 +226,7 @@ async function resolveRelease(spec: string | undefined): Promise<string> {
 }
 
 async function resolvePrerelease(
-  channel: "beta" | "alpha",
+  channel: "beta" | "alpha" | "rc",
   spec: string | undefined,
 ): Promise<string> {
   if (spec !== undefined) {
@@ -309,6 +314,7 @@ if (headTagVersion) {
       break;
     case "beta":
     case "alpha":
+    case "rc":
       newVersion = await resolvePrerelease(plan.channel, plan.spec);
       break;
     case "tag":

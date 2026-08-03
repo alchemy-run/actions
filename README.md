@@ -24,10 +24,16 @@ inferred from its shape:
 | `1.2.3`             | release  | Explicit stable version                    |
 | `beta` / `beta.N`   | beta     | Next or forced beta on `<current-version>` |
 | `alpha` / `alpha.N` | alpha    | Same for alpha                             |
+| `rc` / `rc.N`       | rc       | Release candidate on `<current-version>`   |
 | `<tag-name>`        | tag      | Version becomes `0.0.0-<tag-name>`; **no** git commit, tag, or GitHub Release |
 
 Tag releases always use `0.0.0-<name>` — semver-shaped tag specs like
 `2.0.0-experimental` are rejected. Pass just the name.
+
+**`force-latest`** (boolean input) publishes under npm’s `latest` dist-tag
+whatever the channel — use it to promote a release candidate to latest. If a
+version is already on the registry it moves the existing `latest` tag onto it
+instead of skipping.
 
 **Build modes.** `build-mode: up-front` (default) builds every package
 once at the start of the bump job and ships `lib/`/`bin/` as part of
@@ -74,7 +80,7 @@ matching jobs.
 Channels:
 
 - `release <patch|minor|major|x.y.z>` — stable
-- `beta` / `alpha` `[N]` — auto-incrementing pre-release
+- `beta` / `alpha` / `rc` `[N]` — auto-incrementing pre-release
 - `tag <x.y.z-suffix>` — explicit one-off (no commit, no GitHub Release)
 
 ```yaml
@@ -86,7 +92,7 @@ on:
       channel:
         type: choice
         default: beta
-        options: [release, beta, alpha, tag]
+        options: [release, beta, alpha, rc, tag]
       spec:
         type: string
 jobs:
