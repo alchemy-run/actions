@@ -15,6 +15,10 @@
  *     tag → derived from the version's prerelease suffix (e.g.
  *           2.0.0-experimental.1 → experimental-1)
  *
+ * ALCHEMY_FORCE_LATEST=true overrides the dist-tag to `latest` — and,
+ * when {name}@{version} is already on the registry, moves the existing
+ * `latest` tag onto it instead of skipping.
+ *
  * Usage: bun publish-package.ts <package-dir> <channel>
  *
  * Reads ALCHEMY_PUBLISHABLE_DIRS to know which siblings count.
@@ -80,10 +84,20 @@ const { name, version } = pkg;
 
 console.log(`--- Publishing ${name}@${version} (channel: ${channel}) ---`);
 
+const forceLatest = process.env.ALCHEMY_FORCE_LATEST === "true";
+
 const existing = await $`npm view ${`${name}@${version}`} version`
   .nothrow()
   .quiet();
 if (existing.exitCode === 0 && existing.stdout.toString().trim().length > 0) {
+  if (forceLatest) {
+    // The tarball is already on npm; all that's left is to move the tag.
+    console.log(
+      `${name}@${version} already published; forcing dist-tag latest`,
+    );
+    await $`npm dist-tag add ${`${name}@${version}`} latest`;
+    process.exit(0);
+  }
   console.log(`${name}@${version} already published, skipping`);
   process.exit(0);
 }
@@ -163,8 +177,9 @@ if (tarballs.length !== 1) {
 }
 const tarball = tarballs[0]!;
 
-const distTag =
-  channel === "release"
+const distTag = forceLatest
+  ? "latest"
+  : channel === "release"
     ? "latest"
     : channel === "beta" || channel === "alpha" || channel === "rc"
       ? "next"

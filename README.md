@@ -30,6 +30,11 @@ inferred from its shape:
 Tag releases always use `0.0.0-<name>` — semver-shaped tag specs like
 `2.0.0-experimental` are rejected. Pass just the name.
 
+**`force-latest`** (boolean input) publishes under npm’s `latest` dist-tag
+whatever the channel — use it to promote a release candidate to latest. If a
+version is already on the registry it moves the existing `latest` tag onto it
+instead of skipping.
+
 **Build modes.** `build-mode: up-front` (default) builds every package
 once at the start of the bump job and ships `lib/`/`bin/` as part of
 the `bump-files` artifact — fastest when the whole workspace fits on

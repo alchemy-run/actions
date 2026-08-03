@@ -12,8 +12,15 @@ inputs:
     description: Directory of the package to publish
     required: true
   channel:
-    description: "release | beta | alpha | tag"
+    description: "release | beta | alpha | rc | tag"
     required: true
+  force-latest:
+    description: >-
+      Publish under npm's `latest` dist-tag regardless of channel. When
+      the version is already on the registry, moves `latest` onto it
+      instead of skipping.
+    required: false
+    default: "false"
   dirs-json:
     description: JSON array of ALL publishable dirs (for workspace sibling resolution)
     required: true
@@ -84,4 +91,5 @@ runs:
       env:
         ALCHEMY_PUBLISHABLE_DIRS: ${{ inputs.dirs-json }}
         ALCHEMY_PUBLISHABLE_NAMES: ${{ inputs.names-json }}
+        ALCHEMY_FORCE_LATEST: ${{ inputs.force-latest }}
       run: bun .alchemy-actions/scripts/release/publish-package.ts "${{ inputs.dir }}" "${{ inputs.channel }}"
