@@ -93,7 +93,8 @@ async function upload(
   if (ttl) headers["X-TTL"] = ttl;
 
   console.log(
-    `Publishing ${pkg.project} (${basename(tarball)}) with tags ${JSON.stringify(tags)} ttl=${ttl ?? "default"}`,
+    `Publishing ${pkg.project} (${basename(tarball)}) ` +
+      `with tags ${JSON.stringify(tags)} ttl=${ttl ?? "default"}`,
   );
   const response = await fetch(
     `https://${host}/projects/${projectPath(pkg.project)}/packages`,
@@ -106,7 +107,8 @@ async function upload(
   if (!response.ok) {
     const details = await response.text();
     throw new Error(
-      `Failed to publish ${pkg.project}: ${response.status} ${response.statusText}${details ? `\n${details}` : ""}`,
+      `Failed to publish ${pkg.project}: ${response.status} ` +
+        `${response.statusText}${details ? `\n${details}` : ""}`,
     );
   }
 }
