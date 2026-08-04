@@ -117,6 +117,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+          submodules: ${{ inputs.submodules }}
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -193,10 +194,15 @@ jobs:
       short: ${{ steps.tags.outputs.short }}
       wave1: ${{ steps.waves.outputs.wave1 }}
       wave2: ${{ steps.waves.outputs.wave2 }}
+      wave3: ${{ steps.waves.outputs.wave3 }}
+      wave4: ${{ steps.waves.outputs.wave4 }}
+      wave5: ${{ steps.waves.outputs.wave5 }}
     steps:
       # compute-waves reads each package's package.json from the
       # consumer checkout to derive the DAG, so we need both.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: ${{ inputs.submodules }}
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -228,6 +234,7 @@ jobs:
       - id: waves
         env:
           ALCHEMY_PUBLISHABLE_PACKAGES: ${{ needs.detect-changes.outputs.changed }}
+          ALCHEMY_MAX_WAVES: "5"
         run: |
           set -euo pipefail
           bun "$ACTIONS_DIR/scripts/release/compute-waves.ts" | tee -a "$GITHUB_OUTPUT"
@@ -351,13 +358,220 @@ jobs:
             -H "Content-Type: application/gzip" \
             --data-binary "@${tgz}"
 
+  publish-wave-3:
+    name: wave-3 / ${{ matrix.package.name }}
+    needs: [detect-changes, plan, publish-wave-1, publish-wave-2]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      (needs.publish-wave-1.result == 'success' ||
+       needs.publish-wave-1.result == 'skipped') &&
+      (needs.publish-wave-2.result == 'success' ||
+       needs.publish-wave-2.result == 'skipped') &&
+      needs.plan.outputs.wave3 != '[]'
+    runs-on: ${{ matrix.package.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.plan.outputs.wave3) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: ${{ inputs.submodules }}
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+
+      - uses: ./.alchemy-actions/actions/setup
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build ${{ matrix.package.name }}
+        working-directory: ${{ matrix.package.dir }}
+        run: ${{ inputs.build-command }}
+
+      - name: Pin sibling workspace deps to pr-package URLs
+        env:
+          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
+          ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
+          ALCHEMY_PR_TAG: ${{ needs.plan.outputs.short }}
+        run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ matrix.package.dir }}"
+
+      - name: Publish ${{ matrix.package.name }}
+        env:
+          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
+          TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
+          TAGS: ${{ needs.plan.outputs.tags }}
+          TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
+          PROJECT: ${{ matrix.package.project }}
+        working-directory: ${{ matrix.package.dir }}
+        run: |
+          set -euo pipefail
+          rm -f -- *.tgz
+          bun pm pack --destination .
+          tgz=$(ls *.tgz)
+          echo "Publishing ${PROJECT} ($tgz) with tags $TAGS ttl=${TTL:-default}"
+          curl -fsSL --show-error -X PUT \
+            "https://${PR_PACKAGE_HOST}/projects/${PROJECT}/packages" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "X-Tags: ${TAGS}" \
+            ${TTL:+-H "X-TTL: ${TTL}"} \
+            -H "Content-Type: application/gzip" \
+            --data-binary "@${tgz}"
+
+  publish-wave-4:
+    name: wave-4 / ${{ matrix.package.name }}
+    needs: [detect-changes, plan, publish-wave-1, publish-wave-2, publish-wave-3]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      (needs.publish-wave-1.result == 'success' ||
+       needs.publish-wave-1.result == 'skipped') &&
+      (needs.publish-wave-2.result == 'success' ||
+       needs.publish-wave-2.result == 'skipped') &&
+      (needs.publish-wave-3.result == 'success' ||
+       needs.publish-wave-3.result == 'skipped') &&
+      needs.plan.outputs.wave4 != '[]'
+    runs-on: ${{ matrix.package.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.plan.outputs.wave4) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: ${{ inputs.submodules }}
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+
+      - uses: ./.alchemy-actions/actions/setup
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build ${{ matrix.package.name }}
+        working-directory: ${{ matrix.package.dir }}
+        run: ${{ inputs.build-command }}
+
+      - name: Pin sibling workspace deps to pr-package URLs
+        env:
+          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
+          ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
+          ALCHEMY_PR_TAG: ${{ needs.plan.outputs.short }}
+        run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ matrix.package.dir }}"
+
+      - name: Publish ${{ matrix.package.name }}
+        env:
+          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
+          TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
+          TAGS: ${{ needs.plan.outputs.tags }}
+          TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
+          PROJECT: ${{ matrix.package.project }}
+        working-directory: ${{ matrix.package.dir }}
+        run: |
+          set -euo pipefail
+          rm -f -- *.tgz
+          bun pm pack --destination .
+          tgz=$(ls *.tgz)
+          echo "Publishing ${PROJECT} ($tgz) with tags $TAGS ttl=${TTL:-default}"
+          curl -fsSL --show-error -X PUT \
+            "https://${PR_PACKAGE_HOST}/projects/${PROJECT}/packages" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "X-Tags: ${TAGS}" \
+            ${TTL:+-H "X-TTL: ${TTL}"} \
+            -H "Content-Type: application/gzip" \
+            --data-binary "@${tgz}"
+
+  publish-wave-5:
+    name: wave-5 / ${{ matrix.package.name }}
+    needs:
+      [detect-changes, plan, publish-wave-1, publish-wave-2, publish-wave-3, publish-wave-4]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      (needs.publish-wave-1.result == 'success' ||
+       needs.publish-wave-1.result == 'skipped') &&
+      (needs.publish-wave-2.result == 'success' ||
+       needs.publish-wave-2.result == 'skipped') &&
+      (needs.publish-wave-3.result == 'success' ||
+       needs.publish-wave-3.result == 'skipped') &&
+      (needs.publish-wave-4.result == 'success' ||
+       needs.publish-wave-4.result == 'skipped') &&
+      needs.plan.outputs.wave5 != '[]'
+    runs-on: ${{ matrix.package.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.plan.outputs.wave5) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: ${{ inputs.submodules }}
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+
+      - uses: ./.alchemy-actions/actions/setup
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build ${{ matrix.package.name }}
+        working-directory: ${{ matrix.package.dir }}
+        run: ${{ inputs.build-command }}
+
+      - name: Pin sibling workspace deps to pr-package URLs
+        env:
+          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
+          ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
+          ALCHEMY_PR_TAG: ${{ needs.plan.outputs.short }}
+        run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ matrix.package.dir }}"
+
+      - name: Publish ${{ matrix.package.name }}
+        env:
+          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
+          TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
+          TAGS: ${{ needs.plan.outputs.tags }}
+          TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
+          PROJECT: ${{ matrix.package.project }}
+        working-directory: ${{ matrix.package.dir }}
+        run: |
+          set -euo pipefail
+          rm -f -- *.tgz
+          bun pm pack --destination .
+          tgz=$(ls *.tgz)
+          echo "Publishing ${PROJECT} ($tgz) with tags $TAGS ttl=${TTL:-default}"
+          curl -fsSL --show-error -X PUT \
+            "https://${PR_PACKAGE_HOST}/projects/${PROJECT}/packages" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "X-Tags: ${TAGS}" \
+            ${TTL:+-H "X-TTL: ${TTL}"} \
+            -H "Content-Type: application/gzip" \
+            --data-binary "@${tgz}"
+
   # ── PR-only: sticky install-instructions comment. ───────────────────
   comment:
-    needs: [detect-changes, plan, publish-wave-1, publish-wave-2]
+    needs:
+      [detect-changes, plan, publish-wave-1, publish-wave-2, publish-wave-3, publish-wave-4, publish-wave-5]
     if: >-
       always() && github.event_name == 'pull_request' &&
       needs.detect-changes.outputs.changed != '[]' &&
-      needs.plan.result == 'success'
+      needs.plan.result == 'success' &&
+      (needs.publish-wave-1.result == 'success' ||
+       needs.publish-wave-1.result == 'skipped') &&
+      (needs.publish-wave-2.result == 'success' ||
+       needs.publish-wave-2.result == 'skipped') &&
+      (needs.publish-wave-3.result == 'success' ||
+       needs.publish-wave-3.result == 'skipped') &&
+      (needs.publish-wave-4.result == 'success' ||
+       needs.publish-wave-4.result == 'skipped') &&
+      (needs.publish-wave-5.result == 'success' ||
+       needs.publish-wave-5.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Generate bot token
