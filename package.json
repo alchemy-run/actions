@@ -9,10 +9,6 @@
   },
   "type": "module",
   "description": "Shared CI/CD workflows and scripts for the Alchemy projects",
-  "scripts": {
-    "test": "bun test",
-    "typecheck": "tsc --noEmit"
-  },
   "dependencies": {
     "changelogithub": "^13.16.1"
   },
