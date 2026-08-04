@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /**
- * Publish a complete PR-package graph in two passes:
+ * Publish a complete PR-package graph without exposing public entry points to
+ * a partial same-commit dependency set. Publication happens in two passes:
  *
  * 1. Upload every tarball under the deterministic dependency tag used
  *    inside the packed package.json files.
@@ -13,52 +14,37 @@
  * The second pass deliberately uploads the tarball bytes again because
  * the current PR-package API assigns tags only while handling a package
  * PUT; it does not expose a tag-only assignment endpoint.
+ *
+ * Usage:
+ *   bun scripts/release/publish-pr-package-graph.ts
+ *
+ * Env:
+ *   CHANGED             JSON array of packages and artifact names
+ *   DEPENDENCY_TAG      Private tag used by workspace dependencies
+ *   TAGS                JSON array of public install tags
+ *   PR_PACKAGE_HOST     PR-package service host
+ *   TOKEN               PR-package service token
+ *   TTL                 Optional package lifetime
+ *   ARTIFACT_ROOT       Downloaded artifact root (default: .pr-packages)
+ *
+ * Outputs:
+ *   A complete private dependency graph followed by its public tags
  */
 import { readdirSync } from "node:fs";
 import { basename, join } from "node:path";
+import { fail, jsonArray, required } from "./config.ts";
 
 type Package = {
   project: string;
   artifact: string;
 };
 
-function required(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    throw new Error(`Required env var ${name} is unset or empty`);
-  }
-  return value;
-}
-
 function parsePackages(raw: string): Package[] {
-  const parsed: unknown = JSON.parse(raw);
-  if (
-    !Array.isArray(parsed) ||
-    !parsed.every(
-      (pkg) =>
-        pkg &&
-        typeof pkg === "object" &&
-        typeof pkg.project === "string" &&
-        typeof pkg.artifact === "string",
-    )
-  ) {
-    throw new Error(
-      "CHANGED must be a JSON array of packages with project and artifact fields",
-    );
-  }
-  return parsed as Package[];
+  return jsonArray<Package>("CHANGED", raw);
 }
 
 function parseTags(raw: string): string[] {
-  const parsed: unknown = JSON.parse(raw);
-  if (
-    !Array.isArray(parsed) ||
-    parsed.length === 0 ||
-    !parsed.every((tag) => typeof tag === "string" && tag.length > 0)
-  ) {
-    throw new Error("TAGS must be a non-empty JSON array of strings");
-  }
-  return parsed;
+  return jsonArray<string>("TAGS", raw);
 }
 
 function tarballFor(artifactRoot: string, pkg: Package): string {
@@ -68,7 +54,7 @@ function tarballFor(artifactRoot: string, pkg: Package): string {
     .map((file) => join(artifactDir, file));
 
   if (tarballs.length !== 1) {
-    throw new Error(
+    fail(
       `Expected one tarball for ${pkg.project}, found ${tarballs.length}`,
     );
   }
@@ -109,7 +95,7 @@ async function upload(
   );
   if (!response.ok) {
     const details = await response.text();
-    throw new Error(
+    fail(
       `Failed to publish ${pkg.project}: ${response.status} ` +
         `${response.statusText}${details ? `\n${details}` : ""}`,
     );
@@ -125,17 +111,17 @@ const ttl = process.env.TTL?.trim() || undefined;
 const artifactRoot = process.env.ARTIFACT_ROOT?.trim() || ".pr-packages";
 
 const tarballs = new Map(
-  packages.map((pkg) => [pkg.artifact, tarballFor(artifactRoot, pkg)]),
+  packages.map((p) => [p.artifact, tarballFor(artifactRoot, p)]),
 );
 
 console.log("Publishing same-commit dependency graph");
-for (const pkg of packages) {
-  await upload(host, token, ttl, pkg, tarballs.get(pkg.artifact)!, [
+for (const p of packages) {
+  await upload(host, token, ttl, p, tarballs.get(p.artifact)!, [
     dependencyTag,
   ]);
 }
 
 console.log("Dependency graph complete; exposing public tags");
-for (const pkg of packages) {
-  await upload(host, token, ttl, pkg, tarballs.get(pkg.artifact)!, publicTags);
+for (const p of packages) {
+  await upload(host, token, ttl, p, tarballs.get(p.artifact)!, publicTags);
 }

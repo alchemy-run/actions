@@ -1,6 +1,23 @@
 #!/usr/bin/env bun
-/** Create or update the sticky PR-package installation comment. */
-export {};
+/**
+ * Create or update one sticky pull request comment with install commands for
+ * every package built from the current commit.
+ *
+ * Usage:
+ *   bun scripts/release/comment-pr-packages.ts
+ *
+ * Env:
+ *   GH_TOKEN      GitHub API token
+ *   REPO          Repository in owner/name form
+ *   PR_NUMBER     Pull request number
+ *   SHORT_SHA     Public PR-package tag used in install commands
+ *   INSTALL_HOST  PR-package installation host
+ *   CHANGED       JSON array of packages included in this run
+ *
+ * Outputs:
+ *   One created or updated sticky pull request comment
+ */
+import { fail, jsonArray, required } from "./config.ts";
 
 type Package = {
   name: string;
@@ -16,29 +33,8 @@ type GitHubComment = {
 const MARKER = "<!-- pr-package-comment -->";
 const BOT_LOGIN = "alchemy-version-bot[bot]";
 
-function required(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`Required env var ${name} is unset or empty`);
-  return value;
-}
-
 function parsePackages(raw: string): Package[] {
-  const parsed: unknown = JSON.parse(raw);
-  if (
-    !Array.isArray(parsed) ||
-    !parsed.every(
-      (pkg) =>
-        pkg &&
-        typeof pkg === "object" &&
-        typeof pkg.name === "string" &&
-        typeof pkg.install === "string",
-    )
-  ) {
-    throw new Error(
-      "CHANGED must be a JSON array of packages with name and install",
-    );
-  }
-  return parsed as Package[];
+  return jsonArray<Package>("CHANGED", raw);
 }
 
 async function github<T>(
@@ -58,7 +54,7 @@ async function github<T>(
   });
   if (!response.ok) {
     const details = await response.text();
-    throw new Error(
+    fail(
       `GitHub API ${init.method ?? "GET"} ${path} failed: ` +
         `${response.status} ${response.statusText}\n${details}`,
     );
@@ -94,8 +90,7 @@ for (let page = 1; !existing; page++) {
     `/repos/${repo}/issues/${prNumber}/comments?per_page=100&page=${page}`,
   );
   existing = comments.find(
-    (comment) =>
-      comment.user?.login === BOT_LOGIN && comment.body?.startsWith(MARKER),
+    (c) => c.user?.login === BOT_LOGIN && c.body?.startsWith(MARKER),
   );
   if (comments.length < 100) break;
 }

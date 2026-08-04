@@ -1,7 +1,25 @@
 #!/usr/bin/env bun
-/** Select and normalize the packages included in a PR-package run. */
-import { appendFileSync } from "node:fs";
+/**
+ * Select and normalize the packages included in a PR-package run. Pull
+ * requests use the changed-file graph; pushes and forced runs rebuild all.
+ *
+ * Usage:
+ *   bun scripts/release/plan-pr-packages.ts
+ *
+ * Env:
+ *   EVENT                          GitHub event name
+ *   FORCE_LABEL_PRESENT             Whether the force-ci label is present
+ *   PACKAGES_JSON                   Configured publishable packages
+ *   BASE_SHA / HEAD_SHA             Commits used for pull request diffs
+ *   ALCHEMY_PR_REBUILD_ALL_GLOBS    Paths that rebuild every package
+ *   GITHUB_OUTPUT                   GitHub Actions output file
+ *
+ * Outputs:
+ *   changed  JSON array of normalized packages to build and publish
+ */
+import { $ } from "bun";
 import { join } from "node:path";
+import { fail, jsonArray, output, required } from "./config.ts";
 
 type PackageInput = {
   dir: string;
@@ -20,59 +38,42 @@ type Package = {
   artifact: string;
 };
 
-function required(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`Required env var ${name} is unset or empty`);
-  return value;
-}
-
 function parsePackages(raw: string): PackageInput[] {
-  const parsed: unknown = JSON.parse(raw);
+  const packages = jsonArray<PackageInput>("PACKAGES_JSON", raw);
   if (
-    !Array.isArray(parsed) ||
-    !parsed.every(
-      (pkg) =>
-        pkg &&
-        typeof pkg === "object" &&
-        typeof pkg.dir === "string" &&
-        typeof pkg.name === "string",
+    !packages.every(
+      (p) =>
+        p &&
+        typeof p === "object" &&
+        typeof p.dir === "string" &&
+        typeof p.name === "string",
     )
   ) {
-    throw new Error(
-      "PACKAGES_JSON must be a JSON array of packages with dir and name",
-    );
+    fail("PACKAGES_JSON packages must have dir and name");
   }
-  return parsed as PackageInput[];
+  return packages;
 }
 
 function artifactName(dir: string): string {
-  // encodeURIComponent leaves !'()* untouched, but GitHub artifact
-  // names reject some of them. Encoding the complete RFC 3986 unsafe
-  // set keeps this mapping deterministic and collision-free.
+  // encodeURIComponent leaves !'()* untouched, but GitHub artifact names
+  // reject some of them. Encoding the complete RFC 3986 unsafe set keeps
+  // this mapping deterministic and collision-free.
   const encoded = encodeURIComponent(dir).replace(
     /[!'()*]/g,
-    (character) =>
-      `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
   );
   return `pr-package-${encoded}`;
 }
 
-function normalize(pkg: PackageInput): Package {
+function normalize(p: PackageInput): Package {
   return {
-    dir: pkg.dir,
-    name: pkg.name,
-    project: pkg.project ?? pkg.name,
-    install: pkg.install ?? pkg.project ?? pkg.name,
-    runner: pkg.runner ?? "ubuntu-latest",
-    artifact: artifactName(pkg.dir),
+    dir: p.dir,
+    name: p.name,
+    project: p.project ?? p.name,
+    install: p.install ?? p.project ?? p.name,
+    runner: p.runner ?? "ubuntu-latest",
+    artifact: artifactName(p.dir),
   };
-}
-
-function output(name: string, value: unknown): void {
-  appendFileSync(
-    required("GITHUB_OUTPUT"),
-    `${name}=${JSON.stringify(value)}\n`,
-  );
 }
 
 const event = required("EVENT");
@@ -92,12 +93,12 @@ if (event === "push" || force) {
 const base = required("BASE_SHA");
 const head = required("HEAD_SHA");
 console.log(`Diffing ${base}..${head}`);
-const diffResult = Bun.spawnSync(["git", "diff", "--name-only", base, head], {
-  stdout: "pipe",
-  stderr: "inherit",
-});
+const diffResult = await $`git diff --name-only ${base} ${head}`
+  .nothrow()
+  .quiet();
 if (diffResult.exitCode !== 0) {
-  throw new Error(`git diff failed with exit code ${diffResult.exitCode}`);
+  process.stderr.write(diffResult.stderr);
+  fail(`git diff failed with exit code ${diffResult.exitCode}`);
 }
 
 const diff = diffResult.stdout.toString();
@@ -106,41 +107,37 @@ for (const file of diff.trim().split(/\r?\n/).filter(Boolean)) {
   console.log(`  ${file}`);
 }
 
-const compute = Bun.spawn(
-  [process.execPath, join(import.meta.dir, "compute-changed.ts")],
-  {
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "inherit",
-    env: {
-      ...process.env,
-      ALCHEMY_PUBLISHABLE_DIRS: JSON.stringify(packages.map((pkg) => pkg.dir)),
-      ALCHEMY_PUBLISHABLE_NAMES: JSON.stringify(
-        packages.map((pkg) => pkg.name),
-      ),
-      ALCHEMY_PR_REBUILD_ALL_GLOBS:
-        process.env.ALCHEMY_PR_REBUILD_ALL_GLOBS ?? "",
-    },
-  },
-);
-compute.stdin.write(diff);
-compute.stdin.end();
-const affectedText = await new Response(compute.stdout).text();
-const computeExit = await compute.exited;
-if (computeExit !== 0) {
-  throw new Error(`compute-changed.ts failed with exit code ${computeExit}`);
+const compute = join(import.meta.dir, "compute-changed.ts");
+const dirs = JSON.stringify(packages.map((p) => p.dir));
+const names = JSON.stringify(packages.map((p) => p.name));
+const rebuild = process.env.ALCHEMY_PR_REBUILD_ALL_GLOBS ?? "";
+const affectedResult =
+  await $`printf %s ${diff} | env ALCHEMY_PUBLISHABLE_DIRS=${dirs} ALCHEMY_PUBLISHABLE_NAMES=${names} ALCHEMY_PR_REBUILD_ALL_GLOBS=${rebuild} bun ${compute}`
+    .nothrow()
+    .quiet();
+if (affectedResult.exitCode !== 0) {
+  process.stderr.write(affectedResult.stderr);
+  fail(`compute-changed.ts failed with exit code ${affectedResult.exitCode}`);
 }
-console.log(`compute-changed result: ${affectedText.trim()}`);
 
-const affected = JSON.parse(affectedText) as {
-  changed: Array<{ dir: string }>;
-};
-const byDir = new Map(packages.map((pkg) => [pkg.dir, pkg]));
+const affectedText = affectedResult.stdout.toString();
+console.log(`compute-changed result: ${affectedText.trim()}`);
+let affected: { changed: Array<{ dir: string }> };
+try {
+  affected = JSON.parse(affectedText) as typeof affected;
+} catch (e) {
+  fail(`compute-changed.ts returned invalid JSON: ${(e as Error).message}`);
+}
+if (!Array.isArray(affected.changed)) {
+  fail("compute-changed.ts returned invalid output");
+}
+
+const byDir = new Map(packages.map((p) => [p.dir, p]));
 const changed = affected.changed.map(({ dir }) => {
-  const pkg = byDir.get(dir);
-  if (!pkg) {
-    throw new Error(`compute-changed returned unknown package dir: ${dir}`);
+  const p = byDir.get(dir);
+  if (!p) {
+    fail(`compute-changed returned unknown package dir: ${dir}`);
   }
-  return pkg;
+  return p;
 });
 output("changed", changed);
