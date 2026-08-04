@@ -279,6 +279,17 @@ jobs:
     needs: [detect-changes, plan, pack]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+
+      - uses: ./.alchemy-actions/actions/setup
+        with:
+          node-version: ${{ inputs.node-version }}
+          install: "false"
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: pr-package-*
@@ -292,45 +303,7 @@ jobs:
           PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
           TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
           TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-
-          upload() {
-            local project="$1"
-            local tgz="$2"
-            local tags="$3"
-            echo "Publishing ${project} ($(basename "$tgz")) with tags ${tags} ttl=${TTL:-default}"
-            curl -fsSL --show-error -X PUT \
-              "https://${PR_PACKAGE_HOST}/projects/${project}/packages" \
-              -H "Authorization: Bearer ${TOKEN}" \
-              -H "X-Tags: ${tags}" \
-              ${TTL:+-H "X-TTL: ${TTL}"} \
-              -H "Content-Type: application/gzip" \
-              --data-binary "@${tgz}"
-          }
-
-          # Pass 1: every deterministic graph dependency URL must exist
-          # before any public commit or mutable tag moves to this graph.
-          while IFS= read -r row; do
-            project=$(jq -r '.project' <<< "$row")
-            artifact=$(jq -r '.artifact' <<< "$row")
-            tgz=( ".pr-packages/${artifact}/"*.tgz )
-            [ "${#tgz[@]}" -eq 1 ] || {
-              echo "Expected one tarball for ${project}, found ${#tgz[@]}" >&2
-              exit 1
-            }
-            upload "$project" "${tgz[0]}" "[\"${DEPENDENCY_TAG}\"]"
-          done < <(jq -c '.[]' <<< "$CHANGED")
-
-          # Pass 2: all same-commit dependencies now exist, so full and
-          # short SHA, branch, and PR tags are safe to expose.
-          while IFS= read -r row; do
-            project=$(jq -r '.project' <<< "$row")
-            artifact=$(jq -r '.artifact' <<< "$row")
-            tgz=( ".pr-packages/${artifact}/"*.tgz )
-            upload "$project" "${tgz[0]}" "$TAGS"
-          done < <(jq -c '.[]' <<< "$CHANGED")
+        run: bun "$ACTIONS_DIR/scripts/release/publish-pr-package-graph.ts"
 
   # ── PR-only: sticky install-instructions comment. ───────────────────
   comment:
