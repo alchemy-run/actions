@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Rewrite each `workspace:*` dep in one package's package.json to a
- * tarball URL pointing at the SAME branch + same commit's pr-package
+ * tarball URL pointing at the same commit graph's pr-package
  * tarball. Without this, `bun pm pack` resolves `workspace:*` to the
  * sibling's last-published npm version, so installing the pr-package
  * tarball pulls a stale dep from npm instead of the dep we just
@@ -19,8 +19,8 @@
  *   ALCHEMY_PUBLISHABLE_PACKAGES  full packages JSON array (so we can
  *                                 look up each sibling's `install` path)
  *   ALCHEMY_PR_INSTALL_HOST       e.g. `pkg.distilled.cloud`
- *   ALCHEMY_PR_TAG                e.g. the short SHA used as the
- *                                 pr-package tag for this commit
+ *   ALCHEMY_PR_TAG                e.g. the deterministic full-SHA graph
+ *                                 tag used for this commit
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";

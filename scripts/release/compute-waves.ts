@@ -19,27 +19,19 @@
  *   wave1=[{"dir":"packages/core","name":"@x/core","runner":"ubuntu-latest"}]
  *   wave2=[{"dir":"packages/aws","name":"@x/aws","runner":"ubuntu-22-large"}, ...]
  *
- * Errors out (non-zero exit) if the graph has a cycle or exceeds the
- * configured number of levels. ALCHEMY_MAX_WAVES defaults to 2 so the
- * npm release workflow keeps its existing two-wave contract; callers
- * that declare more wave jobs can raise it explicitly.
+ * Errors out (non-zero exit) if the graph has a cycle or exceeds two
+ * levels (every project we currently release fits in 2 waves — anchor
+ * + everything-else; if you genuinely need a third, bump MAX_WAVES
+ * here and add a matching publish-wave-3 job to release.yml).
  *
  * Reads ALCHEMY_PUBLISHABLE_PACKAGES (full JSON array of objects with
  * at least `dir` and `name`). Defaults `runner` to "ubuntu-latest" on
- * each item if unset. ALCHEMY_MAX_WAVES optionally sets the number of
- * wave outputs and maximum accepted graph depth.
+ * each item if unset.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const rawMaxWaves = process.env.ALCHEMY_MAX_WAVES ?? "2";
-const MAX_WAVES = Number(rawMaxWaves);
-if (!Number.isSafeInteger(MAX_WAVES) || MAX_WAVES < 1) {
-  console.error(
-    `ALCHEMY_MAX_WAVES must be a positive integer, received: ${JSON.stringify(rawMaxWaves)}`,
-  );
-  process.exit(1);
-}
+const MAX_WAVES = 2;
 
 type Package = {
   dir: string;
@@ -150,7 +142,7 @@ const maxWave = Math.max(0, ...wave.values());
 if (maxWave > MAX_WAVES) {
   console.error(
     `Dependency graph depth (${maxWave}) exceeds MAX_WAVES (${MAX_WAVES}). ` +
-      "Increase ALCHEMY_MAX_WAVES only when the calling workflow declares matching publish-wave-N jobs.",
+      "Bump MAX_WAVES in compute-waves.ts and add matching publish-wave-N jobs to release.yml.",
   );
   process.exit(1);
 }

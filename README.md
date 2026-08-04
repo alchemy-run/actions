@@ -74,8 +74,7 @@ wave 2: @distilled.cloud/aws, …/cloudflare, …/neon, …       (parallel)
 ```
 
 The npm release workflow pre-declares two wave jobs and skips the empty
-ones. Its two-wave limit is unchanged; the PR-package workflow has its
-own five-wave limit for deeper preview dependency graphs.
+ones. Deeper npm release DAGs require adding matching jobs.
 
 Channels:
 
@@ -164,11 +163,12 @@ Top-level inputs include `pr-package-host` (upload target, default
 `pr-package-host`), `build-command` (default `bun run build`, run
 per-package), and `force-ci-label` (default `force-ci`).
 
-PR-package publishes support dependency graphs up to five levels deep.
-Each wave starts only after every package in the preceding waves succeeds,
-so mutable branch and PR tags for a dependent are never exposed before its
-same-commit workspace dependencies. Install instructions are posted only
-after every non-empty wave succeeds.
+PR-package builds and packs every selected package in one parallel pass,
+with configured workspace dependencies rewritten to deterministic URLs for
+the same commit graph. It uploads the complete dependency set first, then
+exposes full/short commit, branch, and PR tags. Graph depth is therefore not
+limited by a fixed number of workflow jobs, and install instructions are
+posted only after the complete graph is available.
 
 ## Required secrets (inherited from the caller)
 

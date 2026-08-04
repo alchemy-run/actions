@@ -1,9 +1,8 @@
 name: pr-package (reusable)
 
-# Reusable workflow that mirrors release.yml's wave structure but
-# publishes per-commit tarballs to a pr-package service (default
-# pkg.ing) instead of npm. Same DAG, same wave parallelism. No commit,
-# no GitHub Release.
+# Reusable workflow that publishes a complete set of per-commit tarballs
+# to a pr-package service (default pkg.ing) instead of npm. No commit or
+# GitHub Release.
 #
 # Behaviour:
 #   - push to main / force-ci label  → republish every package
@@ -16,8 +15,10 @@ name: pr-package (reusable)
 #                                       keep resolving; the bucket's
 #                                       TTL handles orphan cleanup.
 #
-# Inside each wave: build the package (in its own dir), rewrite
-# `workspace:*` deps to pr-package URLs at the same SHA, pack, upload.
+# Packages build and pack in parallel after every configured workspace
+# dependency is rewritten to a deterministic full-SHA graph URL. Only
+# after all tarballs exist do we upload the dependency set, followed by
+# public commit, branch, and PR tags.
 
 on:
   workflow_call:
@@ -150,7 +151,8 @@ jobs:
                   name,
                   project: (.project // .name),
                   install: (.install // .project // .name),
-                  runner:  (.runner  // "ubuntu-latest") })')
+                  runner:  (.runner  // "ubuntu-latest"),
+                  artifact: ("pr-package-" + (.dir | @uri)) })')
 
           if [ "$EVENT" = "push" ] || [ "$FORCE_LABEL_PRESENT" = "true" ]; then
             [ "$EVENT" = "push" ] \
@@ -184,22 +186,49 @@ jobs:
               | map($byDir[.dir])')
           echo "changed=$MATRIX" | tee -a "$GITHUB_OUTPUT"
 
-  # ── Step 2: compute install/CDN tags + the publish DAG. ─────────────
+  # ── Step 2: compute immutable and mutable install/CDN tags. ─────────
   plan:
     needs: detect-changes
     if: needs.detect-changes.outputs.changed != '[]'
     runs-on: ubuntu-latest
     outputs:
+      dependency_tag: ${{ steps.tags.outputs.dependency_tag }}
       tags: ${{ steps.tags.outputs.tags }}
       short: ${{ steps.tags.outputs.short }}
-      wave1: ${{ steps.waves.outputs.wave1 }}
-      wave2: ${{ steps.waves.outputs.wave2 }}
-      wave3: ${{ steps.waves.outputs.wave3 }}
-      wave4: ${{ steps.waves.outputs.wave4 }}
-      wave5: ${{ steps.waves.outputs.wave5 }}
+      sha: ${{ steps.tags.outputs.sha }}
     steps:
-      # compute-waves reads each package's package.json from the
-      # consumer checkout to derive the DAG, so we need both.
+      - id: tags
+        env:
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          short="${SHA:0:7}"
+          long="$SHA"
+          dependency_tag="graph-${long}"
+          tags=("$short" "$long" "$BRANCH")
+          [ "$EVENT" = "pull_request" ] && tags+=("pr-${PR_NUMBER}")
+          tags_json=$(printf '%s\n' "${tags[@]}" | jq -R . | jq -s -c .)
+          {
+            echo "dependency_tag=$dependency_tag"
+            echo "tags=$tags_json"
+            echo "short=$short"
+            echo "sha=$long"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  # ── Step 3: build and pack the complete graph in one parallel pass. ─
+  pack:
+    name: pack / ${{ matrix.package.name }}
+    needs: [detect-changes, plan]
+    if: needs.detect-changes.outputs.changed != '[]'
+    runs-on: ${{ matrix.package.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.detect-changes.outputs.changed) }}
+    steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: ${{ inputs.submodules }}
@@ -213,255 +242,104 @@ jobs:
       - uses: ./.alchemy-actions/actions/setup
         with:
           node-version: ${{ inputs.node-version }}
-          install: "false"
 
-      - id: tags
+      - name: Build ${{ matrix.package.name }}
+        working-directory: ${{ matrix.package.dir }}
+        run: ${{ inputs.build-command }}
+
+      - name: Pin sibling workspace deps to same-graph URLs
         env:
-          EVENT: ${{ github.event_name }}
-          BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
+          ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
+          ALCHEMY_PR_TAG: ${{ needs.plan.outputs.dependency_tag }}
+        run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ matrix.package.dir }}"
+
+      - name: Pack ${{ matrix.package.name }}
+        working-directory: ${{ matrix.package.dir }}
         run: |
           set -euo pipefail
-          short="${SHA:0:7}"
-          long="$SHA"
-          tags=("$short" "$long" "$BRANCH")
-          [ "$EVENT" = "pull_request" ] && tags+=("pr-${PR_NUMBER}")
-          json=$(printf '%s\n' "${tags[@]}" | jq -R . | jq -s -c .)
-          echo "tags=$json" | tee -a "$GITHUB_OUTPUT"
-          echo "short=$short" | tee -a "$GITHUB_OUTPUT"
+          shopt -s nullglob
+          rm -f -- *.tgz
+          bun pm pack --destination .
+          tgz=( *.tgz )
+          [ "${#tgz[@]}" -eq 1 ] || {
+            echo "Expected exactly one tarball, found ${#tgz[@]}" >&2
+            exit 1
+          }
 
-      - id: waves
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.package.artifact }}
+          path: ${{ matrix.package.dir }}/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Step 4: publish the immutable set, then expose mutable tags. ────
+  publish:
+    needs: [detect-changes, plan, pack]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: pr-package-*
+          path: .pr-packages
+
+      - name: Publish complete package graph
         env:
-          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ needs.detect-changes.outputs.changed }}
-          ALCHEMY_MAX_WAVES: "5"
+          CHANGED: ${{ needs.detect-changes.outputs.changed }}
+          DEPENDENCY_TAG: ${{ needs.plan.outputs.dependency_tag }}
+          TAGS: ${{ needs.plan.outputs.tags }}
+          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
+          TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
+          TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
         run: |
           set -euo pipefail
-          bun "$ACTIONS_DIR/scripts/release/compute-waves.ts" | tee -a "$GITHUB_OUTPUT"
+          shopt -s nullglob
 
-  # ── Step 3: publish in waves. Same shape as release.yml. ────────────
-  publish-wave-1:
-    name: wave-1 / ${{ matrix.package.name }}
-    needs: [detect-changes, plan]
-    if: needs.plan.outputs.wave1 != '[]'
-    runs-on: ${{ matrix.package.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        package: ${{ fromJson(needs.plan.outputs.wave1) }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          submodules: ${{ inputs.submodules }}
+          upload() {
+            local project="$1"
+            local tgz="$2"
+            local tags="$3"
+            echo "Publishing ${project} ($(basename "$tgz")) with tags ${tags} ttl=${TTL:-default}"
+            curl -fsSL --show-error -X PUT \
+              "https://${PR_PACKAGE_HOST}/projects/${project}/packages" \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H "X-Tags: ${tags}" \
+              ${TTL:+-H "X-TTL: ${TTL}"} \
+              -H "Content-Type: application/gzip" \
+              --data-binary "@${tgz}"
+          }
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: alchemy-run/actions
-          ref: ${{ inputs.actions-ref }}
-          path: ${{ env.ACTIONS_DIR }}
+          # Pass 1: every deterministic graph dependency URL must exist
+          # before any public commit or mutable tag moves to this graph.
+          while IFS= read -r row; do
+            project=$(jq -r '.project' <<< "$row")
+            artifact=$(jq -r '.artifact' <<< "$row")
+            tgz=( ".pr-packages/${artifact}/"*.tgz )
+            [ "${#tgz[@]}" -eq 1 ] || {
+              echo "Expected one tarball for ${project}, found ${#tgz[@]}" >&2
+              exit 1
+            }
+            upload "$project" "${tgz[0]}" "[\"${DEPENDENCY_TAG}\"]"
+          done < <(jq -c '.[]' <<< "$CHANGED")
 
-      - uses: ./.alchemy-actions/actions/pr-package
-        with:
-          dir: ${{ matrix.package.dir }}
-          name: ${{ matrix.package.name }}
-          project: ${{ matrix.package.project }}
-          packages-json: ${{ inputs.packages }}
-          install-host: ${{ inputs.install-host || inputs.pr-package-host }}
-          tag: ${{ needs.plan.outputs.short }}
-          pr-package-host: ${{ inputs.pr-package-host }}
-          token: ${{ secrets.PR_PACKAGE_TOKEN }}
-          tags: ${{ needs.plan.outputs.tags }}
-          ttl: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-          build-command: ${{ inputs.build-command }}
-          node-version: ${{ inputs.node-version }}
-
-  publish-wave-2:
-    name: wave-2 / ${{ matrix.package.name }}
-    needs: [detect-changes, plan, publish-wave-1]
-    if: >-
-      always() && needs.plan.result == 'success' &&
-      (needs.publish-wave-1.result == 'success' ||
-       needs.publish-wave-1.result == 'skipped') &&
-      needs.plan.outputs.wave2 != '[]'
-    runs-on: ${{ matrix.package.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        package: ${{ fromJson(needs.plan.outputs.wave2) }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          submodules: ${{ inputs.submodules }}
-
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: alchemy-run/actions
-          ref: ${{ inputs.actions-ref }}
-          path: ${{ env.ACTIONS_DIR }}
-
-      - uses: ./.alchemy-actions/actions/pr-package
-        with:
-          dir: ${{ matrix.package.dir }}
-          name: ${{ matrix.package.name }}
-          project: ${{ matrix.package.project }}
-          packages-json: ${{ inputs.packages }}
-          install-host: ${{ inputs.install-host || inputs.pr-package-host }}
-          tag: ${{ needs.plan.outputs.short }}
-          pr-package-host: ${{ inputs.pr-package-host }}
-          token: ${{ secrets.PR_PACKAGE_TOKEN }}
-          tags: ${{ needs.plan.outputs.tags }}
-          ttl: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-          build-command: ${{ inputs.build-command }}
-          node-version: ${{ inputs.node-version }}
-
-  publish-wave-3:
-    name: wave-3 / ${{ matrix.package.name }}
-    needs: [detect-changes, plan, publish-wave-1, publish-wave-2]
-    if: >-
-      always() && needs.plan.result == 'success' &&
-      (needs.publish-wave-1.result == 'success' ||
-       needs.publish-wave-1.result == 'skipped') &&
-      (needs.publish-wave-2.result == 'success' ||
-       needs.publish-wave-2.result == 'skipped') &&
-      needs.plan.outputs.wave3 != '[]'
-    runs-on: ${{ matrix.package.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        package: ${{ fromJson(needs.plan.outputs.wave3) }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          submodules: ${{ inputs.submodules }}
-
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: alchemy-run/actions
-          ref: ${{ inputs.actions-ref }}
-          path: ${{ env.ACTIONS_DIR }}
-
-      - uses: ./.alchemy-actions/actions/pr-package
-        with:
-          dir: ${{ matrix.package.dir }}
-          name: ${{ matrix.package.name }}
-          project: ${{ matrix.package.project }}
-          packages-json: ${{ inputs.packages }}
-          install-host: ${{ inputs.install-host || inputs.pr-package-host }}
-          tag: ${{ needs.plan.outputs.short }}
-          pr-package-host: ${{ inputs.pr-package-host }}
-          token: ${{ secrets.PR_PACKAGE_TOKEN }}
-          tags: ${{ needs.plan.outputs.tags }}
-          ttl: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-          build-command: ${{ inputs.build-command }}
-          node-version: ${{ inputs.node-version }}
-
-  publish-wave-4:
-    name: wave-4 / ${{ matrix.package.name }}
-    needs: [detect-changes, plan, publish-wave-1, publish-wave-2, publish-wave-3]
-    if: >-
-      always() && needs.plan.result == 'success' &&
-      (needs.publish-wave-1.result == 'success' ||
-       needs.publish-wave-1.result == 'skipped') &&
-      (needs.publish-wave-2.result == 'success' ||
-       needs.publish-wave-2.result == 'skipped') &&
-      (needs.publish-wave-3.result == 'success' ||
-       needs.publish-wave-3.result == 'skipped') &&
-      needs.plan.outputs.wave4 != '[]'
-    runs-on: ${{ matrix.package.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        package: ${{ fromJson(needs.plan.outputs.wave4) }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          submodules: ${{ inputs.submodules }}
-
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: alchemy-run/actions
-          ref: ${{ inputs.actions-ref }}
-          path: ${{ env.ACTIONS_DIR }}
-
-      - uses: ./.alchemy-actions/actions/pr-package
-        with:
-          dir: ${{ matrix.package.dir }}
-          name: ${{ matrix.package.name }}
-          project: ${{ matrix.package.project }}
-          packages-json: ${{ inputs.packages }}
-          install-host: ${{ inputs.install-host || inputs.pr-package-host }}
-          tag: ${{ needs.plan.outputs.short }}
-          pr-package-host: ${{ inputs.pr-package-host }}
-          token: ${{ secrets.PR_PACKAGE_TOKEN }}
-          tags: ${{ needs.plan.outputs.tags }}
-          ttl: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-          build-command: ${{ inputs.build-command }}
-          node-version: ${{ inputs.node-version }}
-
-  publish-wave-5:
-    name: wave-5 / ${{ matrix.package.name }}
-    needs:
-      [detect-changes, plan, publish-wave-1, publish-wave-2, publish-wave-3, publish-wave-4]
-    if: >-
-      always() && needs.plan.result == 'success' &&
-      (needs.publish-wave-1.result == 'success' ||
-       needs.publish-wave-1.result == 'skipped') &&
-      (needs.publish-wave-2.result == 'success' ||
-       needs.publish-wave-2.result == 'skipped') &&
-      (needs.publish-wave-3.result == 'success' ||
-       needs.publish-wave-3.result == 'skipped') &&
-      (needs.publish-wave-4.result == 'success' ||
-       needs.publish-wave-4.result == 'skipped') &&
-      needs.plan.outputs.wave5 != '[]'
-    runs-on: ${{ matrix.package.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        package: ${{ fromJson(needs.plan.outputs.wave5) }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          submodules: ${{ inputs.submodules }}
-
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: alchemy-run/actions
-          ref: ${{ inputs.actions-ref }}
-          path: ${{ env.ACTIONS_DIR }}
-
-      - uses: ./.alchemy-actions/actions/pr-package
-        with:
-          dir: ${{ matrix.package.dir }}
-          name: ${{ matrix.package.name }}
-          project: ${{ matrix.package.project }}
-          packages-json: ${{ inputs.packages }}
-          install-host: ${{ inputs.install-host || inputs.pr-package-host }}
-          tag: ${{ needs.plan.outputs.short }}
-          pr-package-host: ${{ inputs.pr-package-host }}
-          token: ${{ secrets.PR_PACKAGE_TOKEN }}
-          tags: ${{ needs.plan.outputs.tags }}
-          ttl: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-          build-command: ${{ inputs.build-command }}
-          node-version: ${{ inputs.node-version }}
+          # Pass 2: all same-commit dependencies now exist, so full and
+          # short SHA, branch, and PR tags are safe to expose.
+          while IFS= read -r row; do
+            project=$(jq -r '.project' <<< "$row")
+            artifact=$(jq -r '.artifact' <<< "$row")
+            tgz=( ".pr-packages/${artifact}/"*.tgz )
+            upload "$project" "${tgz[0]}" "$TAGS"
+          done < <(jq -c '.[]' <<< "$CHANGED")
 
   # ── PR-only: sticky install-instructions comment. ───────────────────
   comment:
-    needs:
-      [detect-changes, plan, publish-wave-1, publish-wave-2, publish-wave-3, publish-wave-4, publish-wave-5]
+    needs: [detect-changes, plan, publish]
     if: >-
       always() && github.event_name == 'pull_request' &&
       needs.detect-changes.outputs.changed != '[]' &&
       needs.plan.result == 'success' &&
-      (needs.publish-wave-1.result == 'success' ||
-       needs.publish-wave-1.result == 'skipped') &&
-      (needs.publish-wave-2.result == 'success' ||
-       needs.publish-wave-2.result == 'skipped') &&
-      (needs.publish-wave-3.result == 'success' ||
-       needs.publish-wave-3.result == 'skipped') &&
-      (needs.publish-wave-4.result == 'success' ||
-       needs.publish-wave-4.result == 'skipped') &&
-      (needs.publish-wave-5.result == 'success' ||
-       needs.publish-wave-5.result == 'skipped')
+      needs.publish.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Generate bot token
