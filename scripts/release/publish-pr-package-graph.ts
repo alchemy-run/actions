@@ -39,14 +39,6 @@ type Package = {
   artifact: string;
 };
 
-function parsePackages(raw: string): Package[] {
-  return jsonArray<Package>("CHANGED", raw);
-}
-
-function parseTags(raw: string): string[] {
-  return jsonArray<string>("TAGS", raw);
-}
-
 function tarballFor(artifactRoot: string, pkg: Package): string {
   const artifactDir = join(artifactRoot, pkg.artifact);
   const tarballs = readdirSync(artifactDir)
@@ -102,26 +94,25 @@ async function upload(
   }
 }
 
-const packages = parsePackages(required("CHANGED"));
+const packages = jsonArray<Package>("CHANGED", required("CHANGED"));
 const dependencyTag = required("DEPENDENCY_TAG");
-const publicTags = parseTags(required("TAGS"));
+const publicTags = jsonArray<string>("TAGS", required("TAGS"));
 const host = required("PR_PACKAGE_HOST");
 const token = required("TOKEN");
 const ttl = process.env.TTL?.trim() || undefined;
 const artifactRoot = process.env.ARTIFACT_ROOT?.trim() || ".pr-packages";
 
-const tarballs = new Map(
-  packages.map((p) => [p.artifact, tarballFor(artifactRoot, p)]),
-);
+const entries = packages.map((pkg) => ({
+  pkg,
+  tarball: tarballFor(artifactRoot, pkg),
+}));
 
 console.log("Publishing same-commit dependency graph");
-for (const p of packages) {
-  await upload(host, token, ttl, p, tarballs.get(p.artifact)!, [
-    dependencyTag,
-  ]);
+for (const { pkg, tarball } of entries) {
+  await upload(host, token, ttl, pkg, tarball, [dependencyTag]);
 }
 
 console.log("Dependency graph complete; exposing public tags");
-for (const p of packages) {
-  await upload(host, token, ttl, p, tarballs.get(p.artifact)!, publicTags);
+for (const { pkg, tarball } of entries) {
+  await upload(host, token, ttl, pkg, tarball, publicTags);
 }

@@ -122,22 +122,8 @@ if (affectedResult.exitCode !== 0) {
 
 const affectedText = affectedResult.stdout.toString();
 console.log(`compute-changed result: ${affectedText.trim()}`);
-let affected: { changed: Array<{ dir: string }> };
-try {
-  affected = JSON.parse(affectedText) as typeof affected;
-} catch (e) {
-  fail(`compute-changed.ts returned invalid JSON: ${(e as Error).message}`);
-}
-if (!Array.isArray(affected.changed)) {
-  fail("compute-changed.ts returned invalid output");
-}
+const affected = JSON.parse(affectedText) as { changed: { dir: string }[] };
 
 const byDir = new Map(packages.map((p) => [p.dir, p]));
-const changed = affected.changed.map(({ dir }) => {
-  const p = byDir.get(dir);
-  if (!p) {
-    fail(`compute-changed returned unknown package dir: ${dir}`);
-  }
-  return p;
-});
+const changed = affected.changed.map(({ dir }) => byDir.get(dir)!);
 output("changed", changed);

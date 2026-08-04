@@ -6,9 +6,6 @@
  * Usage:
  *   bun scripts/release/pack-pr-package.ts <package-dir>
  *
- * Env:
- *   None
- *
  * Outputs:
  *   One .tgz file in <package-dir>
  */

@@ -33,10 +33,6 @@ type GitHubComment = {
 const MARKER = "<!-- pr-package-comment -->";
 const BOT_LOGIN = "alchemy-version-bot[bot]";
 
-function parsePackages(raw: string): Package[] {
-  return jsonArray<Package>("CHANGED", raw);
-}
-
 async function github<T>(
   token: string,
   path: string,
@@ -67,7 +63,7 @@ const repo = required("REPO");
 const prNumber = required("PR_NUMBER");
 const sha = required("SHORT_SHA");
 const host = required("INSTALL_HOST");
-const packages = parsePackages(required("CHANGED"));
+const packages = jsonArray<Package>("CHANGED", required("CHANGED"));
 
 const body = [
   MARKER,
