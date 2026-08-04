@@ -113,10 +113,7 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     outputs:
-      changed: ${{ steps.compute.outputs.changed }}
-      dependency_tag: ${{ steps.tags.outputs.dependency_tag }}
-      tags: ${{ steps.tags.outputs.tags }}
-      short: ${{ steps.tags.outputs.short }}
+      plan: ${{ steps.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -134,34 +131,32 @@ jobs:
           node-version: ${{ inputs.node-version }}
           install: "false"
 
-      - id: compute
+      - id: plan
         env:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+          SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           FORCE_LABEL_PRESENT: ${{ contains(github.event.pull_request.labels.*.name, inputs.force-ci-label) }}
           PACKAGES_JSON: ${{ inputs.packages }}
+          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
+          INSTALL_HOST: ${{ inputs.install-host }}
           ALCHEMY_PR_REBUILD_ALL_GLOBS: ${{ inputs.rebuild-all-paths }}
         run: bun "$ACTIONS_DIR/scripts/release/plan-pr-packages.ts"
-
-      - id: tags
-        env:
-          EVENT: ${{ github.event_name }}
-          BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: bun "$ACTIONS_DIR/scripts/release/plan-pr-package-tags.ts"
 
   # ── Step 2: build and pack the complete graph in one parallel pass. ─
   pack:
     name: pack / ${{ matrix.package.name }}
     needs: detect-changes
-    if: needs.detect-changes.outputs.changed != '[]'
+    if: >-
+      needs.detect-changes.outputs.plan != '' &&
+      fromJson(needs.detect-changes.outputs.plan).packages[0] != null
     runs-on: ${{ matrix.package.runner }}
     strategy:
       fail-fast: false
       matrix:
-        package: ${{ fromJson(needs.detect-changes.outputs.changed) }}
+        package: ${{ fromJson(needs.detect-changes.outputs.plan).packages }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -181,14 +176,9 @@ jobs:
         working-directory: ${{ matrix.package.dir }}
         run: ${{ inputs.build-command }}
 
-      - name: Pin sibling workspace deps to same-graph URLs
-        env:
-          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
-          ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
-          ALCHEMY_PR_TAG: ${{ needs.detect-changes.outputs.dependency_tag }}
-        run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ matrix.package.dir }}"
-
       - name: Pack ${{ matrix.package.name }}
+        env:
+          PLAN: ${{ needs.detect-changes.outputs.plan }}
         run: bun "$ACTIONS_DIR/scripts/release/pack-pr-package.ts" "${{ matrix.package.dir }}"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -221,9 +211,7 @@ jobs:
 
       - name: Publish complete package graph
         env:
-          CHANGED: ${{ needs.detect-changes.outputs.changed }}
-          DEPENDENCY_TAG: ${{ needs.detect-changes.outputs.dependency_tag }}
-          TAGS: ${{ needs.detect-changes.outputs.tags }}
+          PLAN: ${{ needs.detect-changes.outputs.plan }}
           PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
           TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
           TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
@@ -234,7 +222,8 @@ jobs:
     needs: [detect-changes, publish]
     if: >-
       always() && github.event_name == 'pull_request' &&
-      needs.detect-changes.outputs.changed != '[]' &&
+      needs.detect-changes.outputs.plan != '' &&
+      fromJson(needs.detect-changes.outputs.plan).packages[0] != null &&
       needs.publish.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -261,9 +250,7 @@ jobs:
           GH_TOKEN: ${{ steps.bot-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          SHORT_SHA: ${{ needs.detect-changes.outputs.short }}
-          INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
-          CHANGED: ${{ needs.detect-changes.outputs.changed }}
+          PLAN: ${{ needs.detect-changes.outputs.plan }}
         run: bun "$ACTIONS_DIR/scripts/release/comment-pr-packages.ts"
 
   # PR close intentionally does nothing — pr-package tags persist past

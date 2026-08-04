@@ -10,6 +10,24 @@
  */
 import { appendFileSync } from "node:fs";
 
+export type Package = {
+  dir: string;
+  name: string;
+  project: string;
+  install: string;
+  runner: string;
+  artifact: string;
+};
+
+export type PrPackagePlan = {
+  packages: Package[];
+  publishable_names: string[];
+  tags: string[];
+  dependency_tag: string;
+  short: string;
+  install_host: string;
+};
+
 export function fail(message: string): never {
   console.error(message);
   process.exit(1);

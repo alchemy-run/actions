@@ -1,28 +1,13 @@
 #!/usr/bin/env bun
 /**
- * Create or update one sticky pull request comment with install commands for
- * every package built from the current commit.
- *
- * Usage:
- *   bun scripts/release/comment-pr-packages.ts
- *
- * Env:
- *   GH_TOKEN      GitHub API token
- *   REPO          Repository in owner/name form
- *   PR_NUMBER     Pull request number
- *   SHORT_SHA     Public PR-package tag used in install commands
- *   INSTALL_HOST  PR-package installation host
- *   CHANGED       JSON array of packages included in this run
- *
- * Outputs:
- *   One created or updated sticky pull request comment
+ * Create or update the sticky pull request comment with install commands for
+ * every package in the plan.
  */
-import { fail, jsonArray, required } from "./config.ts";
-
-type Package = {
-  name: string;
-  install: string;
-};
+import {
+  fail,
+  required,
+  type PrPackagePlan,
+} from "./config.ts";
 
 type GitHubComment = {
   id: number;
@@ -33,7 +18,7 @@ type GitHubComment = {
 const MARKER = "<!-- pr-package-comment -->";
 const BOT_LOGIN = "alchemy-version-bot[bot]";
 
-async function github<T>(
+async function requestGitHub<T>(
   token: string,
   path: string,
   init: RequestInit = {},
@@ -61,19 +46,17 @@ async function github<T>(
 const token = required("GH_TOKEN");
 const repo = required("REPO");
 const prNumber = required("PR_NUMBER");
-const sha = required("SHORT_SHA");
-const host = required("INSTALL_HOST");
-const packages = jsonArray<Package>("CHANGED", required("CHANGED"));
+const plan = JSON.parse(required("PLAN")) as PrPackagePlan;
 
 const body = [
   MARKER,
   "",
   "Install the packages built from this commit:",
   "",
-  ...packages.flatMap(({ name, install }) => [
+  ...plan.packages.flatMap(({ name, install }) => [
     `**${name}**`,
     "```sh",
-    `bun add ${name}@https://${host}/${install}/${sha}`,
+    `bun add ${name}@https://${plan.install_host}/${install}/${plan.short}`,
     "```",
     "",
   ]),
@@ -81,7 +64,7 @@ const body = [
 
 let existing: GitHubComment | undefined;
 for (let page = 1; !existing; page++) {
-  const comments = await github<GitHubComment[]>(
+  const comments = await requestGitHub<GitHubComment[]>(
     token,
     `/repos/${repo}/issues/${prNumber}/comments?per_page=100&page=${page}`,
   );
@@ -91,7 +74,7 @@ for (let page = 1; !existing; page++) {
   if (comments.length < 100) break;
 }
 
-await github(
+await requestGitHub(
   token,
   existing
     ? `/repos/${repo}/issues/comments/${existing.id}`
