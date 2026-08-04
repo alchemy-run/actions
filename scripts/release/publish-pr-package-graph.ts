@@ -9,6 +9,10 @@
  *
  * This keeps public entry points on a usable same-commit graph even if
  * an upload fails partway through.
+ *
+ * The second pass deliberately uploads the tarball bytes again because
+ * the current PR-package API assigns tags only while handling a package
+ * PUT; it does not expose a tag-only assignment endpoint.
  */
 import { readdirSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -87,7 +91,6 @@ async function upload(
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/gzip",
-    "Content-Length": String(file.size),
     "X-Tags": JSON.stringify(tags),
   };
   if (ttl) headers["X-TTL"] = ttl;

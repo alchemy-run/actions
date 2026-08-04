@@ -45,6 +45,18 @@ function parsePackages(raw: string): PackageInput[] {
   return parsed as PackageInput[];
 }
 
+function artifactName(dir: string): string {
+  // encodeURIComponent leaves !'()* untouched, but GitHub artifact
+  // names reject some of them. Encoding the complete RFC 3986 unsafe
+  // set keeps this mapping deterministic and collision-free.
+  const encoded = encodeURIComponent(dir).replace(
+    /[!'()*]/g,
+    (character) =>
+      `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `pr-package-${encoded}`;
+}
+
 function normalize(pkg: PackageInput): Package {
   return {
     dir: pkg.dir,
@@ -52,7 +64,7 @@ function normalize(pkg: PackageInput): Package {
     project: pkg.project ?? pkg.name,
     install: pkg.install ?? pkg.project ?? pkg.name,
     runner: pkg.runner ?? "ubuntu-latest",
-    artifact: `pr-package-${encodeURIComponent(pkg.dir)}`,
+    artifact: artifactName(pkg.dir),
   };
 }
 
