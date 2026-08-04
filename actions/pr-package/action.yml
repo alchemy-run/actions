@@ -1,0 +1,85 @@
+name: Publish one PR package
+description: Build, rewrite workspace dependencies, pack, and upload one package to the PR-package service.
+
+inputs:
+  dir:
+    description: Directory of the package to publish
+    required: true
+  name:
+    description: Package name shown in step labels
+    required: true
+  project:
+    description: PR-package project name used for upload
+    required: true
+  packages-json:
+    description: Full publishable package configuration used to resolve sibling install paths
+    required: true
+  install-host:
+    description: Host used for rewritten sibling dependency URLs
+    required: true
+  tag:
+    description: Immutable same-commit tag used for rewritten sibling dependency URLs
+    required: true
+  pr-package-host:
+    description: Host to upload the tarball to
+    required: true
+  token:
+    description: Bearer token for the PR-package service
+    required: true
+  tags:
+    description: JSON array of tags assigned to the uploaded tarball
+    required: true
+  ttl:
+    description: Optional TTL assigned to the uploaded tarball
+    required: false
+    default: ""
+  build-command:
+    description: Build command run in the package directory
+    required: true
+  node-version:
+    description: Node version
+    required: false
+    default: "24"
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.alchemy-actions/actions/setup
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Build ${{ inputs.name }}
+      shell: bash
+      working-directory: ${{ inputs.dir }}
+      run: ${{ inputs.build-command }}
+
+    - name: Pin sibling workspace deps to PR-package URLs
+      shell: bash
+      env:
+        ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages-json }}
+        ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host }}
+        ALCHEMY_PR_TAG: ${{ inputs.tag }}
+      run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ inputs.dir }}"
+
+    - name: Publish ${{ inputs.name }}
+      shell: bash
+      env:
+        PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
+        TOKEN: ${{ inputs.token }}
+        TAGS: ${{ inputs.tags }}
+        TTL: ${{ inputs.ttl }}
+        PROJECT: ${{ inputs.project }}
+      working-directory: ${{ inputs.dir }}
+      run: |
+        set -euo pipefail
+        rm -f -- *.tgz
+        bun pm pack --destination .
+        tgz=$(ls *.tgz)
+        echo "Publishing ${PROJECT} ($tgz) with tags $TAGS ttl=${TTL:-default}"
+        curl -fsSL --show-error -X PUT \
+          "https://${PR_PACKAGE_HOST}/projects/${PROJECT}/packages" \
+          -H "Authorization: Bearer ${TOKEN}" \
+          -H "X-Tags: ${TAGS}" \
+          ${TTL:+-H "X-TTL: ${TTL}"} \
+          -H "Content-Type: application/gzip" \
+          --data-binary "@${tgz}"

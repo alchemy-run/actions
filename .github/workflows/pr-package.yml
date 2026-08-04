@@ -260,42 +260,20 @@ jobs:
           ref: ${{ inputs.actions-ref }}
           path: ${{ env.ACTIONS_DIR }}
 
-      - uses: ./.alchemy-actions/actions/setup
+      - uses: ./.alchemy-actions/actions/pr-package
         with:
+          dir: ${{ matrix.package.dir }}
+          name: ${{ matrix.package.name }}
+          project: ${{ matrix.package.project }}
+          packages-json: ${{ inputs.packages }}
+          install-host: ${{ inputs.install-host || inputs.pr-package-host }}
+          tag: ${{ needs.plan.outputs.short }}
+          pr-package-host: ${{ inputs.pr-package-host }}
+          token: ${{ secrets.PR_PACKAGE_TOKEN }}
+          tags: ${{ needs.plan.outputs.tags }}
+          ttl: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
+          build-command: ${{ inputs.build-command }}
           node-version: ${{ inputs.node-version }}
-
-      - name: Build ${{ matrix.package.name }}
-        working-directory: ${{ matrix.package.dir }}
-        run: ${{ inputs.build-command }}
-
-      - name: Pin sibling workspace deps to pr-package URLs
-        env:
-          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
-          ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
-          ALCHEMY_PR_TAG: ${{ needs.plan.outputs.short }}
-        run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ matrix.package.dir }}"
-
-      - name: Publish ${{ matrix.package.name }}
-        env:
-          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
-          TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
-          TAGS: ${{ needs.plan.outputs.tags }}
-          TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-          PROJECT: ${{ matrix.package.project }}
-        working-directory: ${{ matrix.package.dir }}
-        run: |
-          set -euo pipefail
-          rm -f -- *.tgz
-          bun pm pack --destination .
-          tgz=$(ls *.tgz)
-          echo "Publishing ${PROJECT} ($tgz) with tags $TAGS ttl=${TTL:-default}"
-          curl -fsSL --show-error -X PUT \
-            "https://${PR_PACKAGE_HOST}/projects/${PROJECT}/packages" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "X-Tags: ${TAGS}" \
-            ${TTL:+-H "X-TTL: ${TTL}"} \
-            -H "Content-Type: application/gzip" \
-            --data-binary "@${tgz}"
 
   publish-wave-2:
     name: wave-2 / ${{ matrix.package.name }}
@@ -321,42 +299,20 @@ jobs:
           ref: ${{ inputs.actions-ref }}
           path: ${{ env.ACTIONS_DIR }}
 
-      - uses: ./.alchemy-actions/actions/setup
+      - uses: ./.alchemy-actions/actions/pr-package
         with:
+          dir: ${{ matrix.package.dir }}
+          name: ${{ matrix.package.name }}
+          project: ${{ matrix.package.project }}
+          packages-json: ${{ inputs.packages }}
+          install-host: ${{ inputs.install-host || inputs.pr-package-host }}
+          tag: ${{ needs.plan.outputs.short }}
+          pr-package-host: ${{ inputs.pr-package-host }}
+          token: ${{ secrets.PR_PACKAGE_TOKEN }}
+          tags: ${{ needs.plan.outputs.tags }}
+          ttl: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
+          build-command: ${{ inputs.build-command }}
           node-version: ${{ inputs.node-version }}
-
-      - name: Build ${{ matrix.package.name }}
-        working-directory: ${{ matrix.package.dir }}
-        run: ${{ inputs.build-command }}
-
-      - name: Pin sibling workspace deps to pr-package URLs
-        env:
-          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
-          ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
-          ALCHEMY_PR_TAG: ${{ needs.plan.outputs.short }}
-        run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ matrix.package.dir }}"
-
-      - name: Publish ${{ matrix.package.name }}
-        env:
-          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
-          TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
-          TAGS: ${{ needs.plan.outputs.tags }}
-          TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-          PROJECT: ${{ matrix.package.project }}
-        working-directory: ${{ matrix.package.dir }}
-        run: |
-          set -euo pipefail
-          rm -f -- *.tgz
-          bun pm pack --destination .
-          tgz=$(ls *.tgz)
-          echo "Publishing ${PROJECT} ($tgz) with tags $TAGS ttl=${TTL:-default}"
-          curl -fsSL --show-error -X PUT \
-            "https://${PR_PACKAGE_HOST}/projects/${PROJECT}/packages" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "X-Tags: ${TAGS}" \
-            ${TTL:+-H "X-TTL: ${TTL}"} \
-            -H "Content-Type: application/gzip" \
-            --data-binary "@${tgz}"
 
   publish-wave-3:
     name: wave-3 / ${{ matrix.package.name }}
@@ -384,42 +340,20 @@ jobs:
           ref: ${{ inputs.actions-ref }}
           path: ${{ env.ACTIONS_DIR }}
 
-      - uses: ./.alchemy-actions/actions/setup
+      - uses: ./.alchemy-actions/actions/pr-package
         with:
+          dir: ${{ matrix.package.dir }}
+          name: ${{ matrix.package.name }}
+          project: ${{ matrix.package.project }}
+          packages-json: ${{ inputs.packages }}
+          install-host: ${{ inputs.install-host || inputs.pr-package-host }}
+          tag: ${{ needs.plan.outputs.short }}
+          pr-package-host: ${{ inputs.pr-package-host }}
+          token: ${{ secrets.PR_PACKAGE_TOKEN }}
+          tags: ${{ needs.plan.outputs.tags }}
+          ttl: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
+          build-command: ${{ inputs.build-command }}
           node-version: ${{ inputs.node-version }}
-
-      - name: Build ${{ matrix.package.name }}
-        working-directory: ${{ matrix.package.dir }}
-        run: ${{ inputs.build-command }}
-
-      - name: Pin sibling workspace deps to pr-package URLs
-        env:
-          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
-          ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
-          ALCHEMY_PR_TAG: ${{ needs.plan.outputs.short }}
-        run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ matrix.package.dir }}"
-
-      - name: Publish ${{ matrix.package.name }}
-        env:
-          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
-          TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
-          TAGS: ${{ needs.plan.outputs.tags }}
-          TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-          PROJECT: ${{ matrix.package.project }}
-        working-directory: ${{ matrix.package.dir }}
-        run: |
-          set -euo pipefail
-          rm -f -- *.tgz
-          bun pm pack --destination .
-          tgz=$(ls *.tgz)
-          echo "Publishing ${PROJECT} ($tgz) with tags $TAGS ttl=${TTL:-default}"
-          curl -fsSL --show-error -X PUT \
-            "https://${PR_PACKAGE_HOST}/projects/${PROJECT}/packages" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "X-Tags: ${TAGS}" \
-            ${TTL:+-H "X-TTL: ${TTL}"} \
-            -H "Content-Type: application/gzip" \
-            --data-binary "@${tgz}"
 
   publish-wave-4:
     name: wave-4 / ${{ matrix.package.name }}
@@ -449,42 +383,20 @@ jobs:
           ref: ${{ inputs.actions-ref }}
           path: ${{ env.ACTIONS_DIR }}
 
-      - uses: ./.alchemy-actions/actions/setup
+      - uses: ./.alchemy-actions/actions/pr-package
         with:
+          dir: ${{ matrix.package.dir }}
+          name: ${{ matrix.package.name }}
+          project: ${{ matrix.package.project }}
+          packages-json: ${{ inputs.packages }}
+          install-host: ${{ inputs.install-host || inputs.pr-package-host }}
+          tag: ${{ needs.plan.outputs.short }}
+          pr-package-host: ${{ inputs.pr-package-host }}
+          token: ${{ secrets.PR_PACKAGE_TOKEN }}
+          tags: ${{ needs.plan.outputs.tags }}
+          ttl: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
+          build-command: ${{ inputs.build-command }}
           node-version: ${{ inputs.node-version }}
-
-      - name: Build ${{ matrix.package.name }}
-        working-directory: ${{ matrix.package.dir }}
-        run: ${{ inputs.build-command }}
-
-      - name: Pin sibling workspace deps to pr-package URLs
-        env:
-          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
-          ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
-          ALCHEMY_PR_TAG: ${{ needs.plan.outputs.short }}
-        run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ matrix.package.dir }}"
-
-      - name: Publish ${{ matrix.package.name }}
-        env:
-          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
-          TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
-          TAGS: ${{ needs.plan.outputs.tags }}
-          TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-          PROJECT: ${{ matrix.package.project }}
-        working-directory: ${{ matrix.package.dir }}
-        run: |
-          set -euo pipefail
-          rm -f -- *.tgz
-          bun pm pack --destination .
-          tgz=$(ls *.tgz)
-          echo "Publishing ${PROJECT} ($tgz) with tags $TAGS ttl=${TTL:-default}"
-          curl -fsSL --show-error -X PUT \
-            "https://${PR_PACKAGE_HOST}/projects/${PROJECT}/packages" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "X-Tags: ${TAGS}" \
-            ${TTL:+-H "X-TTL: ${TTL}"} \
-            -H "Content-Type: application/gzip" \
-            --data-binary "@${tgz}"
 
   publish-wave-5:
     name: wave-5 / ${{ matrix.package.name }}
@@ -517,42 +429,20 @@ jobs:
           ref: ${{ inputs.actions-ref }}
           path: ${{ env.ACTIONS_DIR }}
 
-      - uses: ./.alchemy-actions/actions/setup
+      - uses: ./.alchemy-actions/actions/pr-package
         with:
+          dir: ${{ matrix.package.dir }}
+          name: ${{ matrix.package.name }}
+          project: ${{ matrix.package.project }}
+          packages-json: ${{ inputs.packages }}
+          install-host: ${{ inputs.install-host || inputs.pr-package-host }}
+          tag: ${{ needs.plan.outputs.short }}
+          pr-package-host: ${{ inputs.pr-package-host }}
+          token: ${{ secrets.PR_PACKAGE_TOKEN }}
+          tags: ${{ needs.plan.outputs.tags }}
+          ttl: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
+          build-command: ${{ inputs.build-command }}
           node-version: ${{ inputs.node-version }}
-
-      - name: Build ${{ matrix.package.name }}
-        working-directory: ${{ matrix.package.dir }}
-        run: ${{ inputs.build-command }}
-
-      - name: Pin sibling workspace deps to pr-package URLs
-        env:
-          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
-          ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
-          ALCHEMY_PR_TAG: ${{ needs.plan.outputs.short }}
-        run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ matrix.package.dir }}"
-
-      - name: Publish ${{ matrix.package.name }}
-        env:
-          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
-          TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
-          TAGS: ${{ needs.plan.outputs.tags }}
-          TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-          PROJECT: ${{ matrix.package.project }}
-        working-directory: ${{ matrix.package.dir }}
-        run: |
-          set -euo pipefail
-          rm -f -- *.tgz
-          bun pm pack --destination .
-          tgz=$(ls *.tgz)
-          echo "Publishing ${PROJECT} ($tgz) with tags $TAGS ttl=${TTL:-default}"
-          curl -fsSL --show-error -X PUT \
-            "https://${PR_PACKAGE_HOST}/projects/${PROJECT}/packages" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "X-Tags: ${TAGS}" \
-            ${TTL:+-H "X-TTL: ${TTL}"} \
-            -H "Content-Type: application/gzip" \
-            --data-binary "@${tgz}"
 
   # ── PR-only: sticky install-instructions comment. ───────────────────
   comment:
