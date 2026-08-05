@@ -11,6 +11,12 @@ import {
   type Package,
   type PrPackagePlan,
 } from "./config.ts";
+import {
+  DEPENDENCY_SECTIONS,
+  graphEdgeTag,
+  graphUrl,
+  type Manifest,
+} from "./pr-package-graph.ts";
 
 function findTarball(artifactRoot: string, pkg: Package): string {
   const artifactDir = join(artifactRoot, pkg.artifact);
@@ -24,6 +30,21 @@ function findTarball(artifactRoot: string, pkg: Package): string {
     );
   }
   return tarballs[0]!;
+}
+
+function packedManifest(tarball: string): Manifest {
+  const result = Bun.spawnSync(
+    ["tar", "-xOf", tarball, "package/package.json"],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  if (result.exitCode !== 0) {
+    process.stderr.write(result.stderr);
+    fail(`Failed to read package/package.json from ${tarball}`);
+  }
+  return JSON.parse(result.stdout.toString()) as Manifest;
 }
 
 async function upload(
@@ -77,10 +98,30 @@ const entries = plan.packages.map((pkg) => ({
   pkg,
   tarball: findTarball(artifactRoot, pkg),
 }));
+const byName = new Map(entries.map((entry) => [entry.pkg.name, entry]));
+const dependencyTags = new Map(
+  entries.map(({ pkg }) => [pkg.name, new Set([plan.dependency_tag])]),
+);
+
+for (const { pkg, tarball } of entries) {
+  const manifest = packedManifest(tarball);
+  for (const section of DEPENDENCY_SECTIONS) {
+    for (const [name, value] of Object.entries(manifest[section] ?? {})) {
+      const dependency = byName.get(name)?.pkg;
+      if (!dependency) continue;
+      const tag = graphEdgeTag(plan.dependency_tag, manifest.name ?? pkg.name);
+      if (value === graphUrl(plan, dependency.install, tag)) {
+        dependencyTags.get(name)!.add(tag);
+      }
+    }
+  }
+}
 
 console.log("Publishing same-commit dependency graph");
 for (const { pkg, tarball } of entries) {
-  await upload(host, token, ttl, pkg, tarball, [plan.dependency_tag]);
+  await upload(host, token, ttl, pkg, tarball, [
+    ...dependencyTags.get(pkg.name)!,
+  ]);
 }
 
 console.log("Dependency graph complete; exposing public tags");

@@ -17,21 +17,13 @@ import {
   type Package,
   type PrPackagePlan,
 } from "./config.ts";
-
-type Manifest = {
-  name?: string;
-  dependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
-  peerDependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-};
-
-const DEPENDENCY_SECTIONS = [
-  "dependencies",
-  "devDependencies",
-  "peerDependencies",
-  "optionalDependencies",
-] as const;
+import {
+  DEPENDENCY_SECTIONS,
+  duplicateWorkspaceDependencies,
+  graphEdgeTag,
+  graphUrl,
+  type Manifest,
+} from "./pr-package-graph.ts";
 
 function rewriteDependencies(
   plan: PrPackagePlan,
@@ -42,9 +34,12 @@ function rewriteDependencies(
     plan.packages.map((p) => [p.name, p]),
   );
   const publishable = new Set(plan.publishable_names);
+  const duplicates = duplicateWorkspaceDependencies(plan);
   const manifest = JSON.parse(
     readFileSync(manifestPath, "utf-8"),
   ) as Manifest;
+  const parentName =
+    manifest.name ?? plan.packages.find((pkg) => pkg.dir === dir)?.name ?? dir;
   let rewritten = false;
 
   for (const section of DEPENDENCY_SECTIONS) {
@@ -59,7 +54,10 @@ function rewriteDependencies(
         );
       }
       if (!dependency) continue;
-      const url = `https://${plan.install_host}/${dependency.install}/${plan.dependency_tag}`;
+      const tag = duplicates.has(name)
+        ? graphEdgeTag(plan.dependency_tag, parentName)
+        : plan.dependency_tag;
+      const url = graphUrl(plan, dependency.install, tag);
       dependencies[name] = url;
       console.log(
         `  ${manifest.name ?? dir}: ${section}.${name}: ${value} → ${url}`,
