@@ -8,7 +8,7 @@
  * Reads ALCHEMY_REPO for the GitHub repo to query commits/authors from.
  */
 import { $ } from "bun";
-import { generate } from "changelogithub";
+import { generate } from "./changelog.ts";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { repo } from "./config.ts";

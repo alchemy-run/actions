@@ -22,7 +22,7 @@
  * Reads ALCHEMY_REPO for the GitHub repo to query commit history from.
  */
 import { $ } from "bun";
-import { generate } from "changelogithub";
+import { generate } from "./changelog.ts";
 import { repo } from "./config.ts";
 
 type Channel = "release" | "beta" | "alpha" | "rc" | "tag";
