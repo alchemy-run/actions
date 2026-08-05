@@ -2,6 +2,10 @@ name: Publish one package
 description: Checkout the consumer at the release SHA, download bump-files, optionally build, and publish one package to npm via the shared publish-package.ts.
 
 inputs:
+  actions-repository:
+    description: Repository containing the shared actions and release scripts
+    required: false
+    default: alchemy-run/actions
   ref:
     description: SHA of the consumer repo to check out (the release commit)
     required: true
@@ -56,7 +60,7 @@ runs:
 
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
-        repository: alchemy-run/actions
+        repository: ${{ inputs.actions-repository }}
         ref: ${{ inputs.actions-ref }}
         path: .alchemy-actions
 
