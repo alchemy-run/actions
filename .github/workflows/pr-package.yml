@@ -62,10 +62,13 @@ on:
         type: string
         default: "24"
       actions-ref:
-        description: Ref of the alchemy-run/actions repo to check out
+        description: >-
+          Optional override for the alchemy-run/actions ref used by the
+          workflow's scripts. Defaults to the exact commit containing this
+          reusable workflow.
         required: false
         type: string
-        default: main
+        default: ""
       force-ci-label:
         description: "PR label that forces rebuild of every package"
         required: false
@@ -122,8 +125,8 @@ jobs:
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: alchemy-run/actions
-          ref: ${{ inputs.actions-ref }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ inputs.actions-ref || job.workflow_sha }}
           path: ${{ env.ACTIONS_DIR }}
 
       - uses: ./.alchemy-actions/actions/setup
@@ -164,8 +167,8 @@ jobs:
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: alchemy-run/actions
-          ref: ${{ inputs.actions-ref }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ inputs.actions-ref || job.workflow_sha }}
           path: ${{ env.ACTIONS_DIR }}
 
       - uses: ./.alchemy-actions/actions/setup
@@ -195,8 +198,8 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: alchemy-run/actions
-          ref: ${{ inputs.actions-ref }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ inputs.actions-ref || job.workflow_sha }}
           path: ${{ env.ACTIONS_DIR }}
 
       - uses: ./.alchemy-actions/actions/setup
@@ -229,8 +232,8 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          repository: alchemy-run/actions
-          ref: ${{ inputs.actions-ref }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ inputs.actions-ref || job.workflow_sha }}
           path: ${{ env.ACTIONS_DIR }}
 
       - uses: ./.alchemy-actions/actions/setup

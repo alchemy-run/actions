@@ -110,6 +110,11 @@ jobs:
     secrets: inherit
 ```
 
+Reusable workflows automatically load their actions and scripts from the
+exact commit GitHub resolved for the workflow reference. This keeps branch,
+tag, and SHA callers self-contained. The optional `actions-ref` input exists
+only for testing a different scripts revision explicitly.
+
 ### `pr-package.yml`
 
 Publishes per-package tarballs to a pr-package service (default
