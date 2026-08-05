@@ -73,9 +73,8 @@ wave 1: @distilled.cloud/core
 wave 2: @distilled.cloud/aws, …/cloudflare, …/neon, …       (parallel)
 ```
 
-The workflow pre-declares five wave jobs and skips the empty ones —
-deeper DAGs require bumping `MAX_WAVES` in `compute-waves.ts` and adding
-matching jobs.
+The npm release workflow pre-declares two wave jobs and skips the empty
+ones. Deeper npm release DAGs require adding matching jobs.
 
 Channels:
 
@@ -163,6 +162,13 @@ Top-level inputs include `pr-package-host` (upload target, default
 `pkg.ing`), `install-host` (CDN host for PR-comment URLs; defaults to
 `pr-package-host`), `build-command` (default `bun run build`, run
 per-package), and `force-ci-label` (default `force-ci`).
+
+PR-package builds and packs every selected package in one parallel pass,
+with configured workspace dependencies rewritten to deterministic URLs for
+the same commit graph. It uploads the complete dependency set first, then
+exposes full/short commit, branch, and PR tags. Graph depth is therefore not
+limited by a fixed number of workflow jobs, and install instructions are
+posted only after the complete graph is available.
 
 ## Required secrets (inherited from the caller)
 

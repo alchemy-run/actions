@@ -1,9 +1,8 @@
 name: pr-package (reusable)
 
-# Reusable workflow that mirrors release.yml's wave structure but
-# publishes per-commit tarballs to a pr-package service (default
-# pkg.ing) instead of npm. Same DAG, same wave parallelism. No commit,
-# no GitHub Release.
+# Reusable workflow that publishes a complete set of per-commit tarballs
+# to a pr-package service (default pkg.ing) instead of npm. No commit or
+# GitHub Release.
 #
 # Behaviour:
 #   - push to main / force-ci label  → republish every package
@@ -16,8 +15,10 @@ name: pr-package (reusable)
 #                                       keep resolving; the bucket's
 #                                       TTL handles orphan cleanup.
 #
-# Inside each wave: build the package (in its own dir), rewrite
-# `workspace:*` deps to pr-package URLs at the same SHA, pack, upload.
+# Packages build and pack in parallel after every configured workspace
+# dependency is rewritten to a deterministic full-SHA graph URL. Only
+# after all tarballs exist do we upload the dependency set, followed by
+# public commit, branch, and PR tags.
 
 on:
   workflow_call:
@@ -112,11 +113,12 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     outputs:
-      changed: ${{ steps.compute.outputs.changed }}
+      plan: ${{ steps.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+          submodules: ${{ inputs.submodules }}
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -129,75 +131,68 @@ jobs:
           node-version: ${{ inputs.node-version }}
           install: "false"
 
-      - id: compute
+      - id: plan
         env:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+          SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           FORCE_LABEL_PRESENT: ${{ contains(github.event.pull_request.labels.*.name, inputs.force-ci-label) }}
           PACKAGES_JSON: ${{ inputs.packages }}
+          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
+          INSTALL_HOST: ${{ inputs.install-host }}
           ALCHEMY_PR_REBUILD_ALL_GLOBS: ${{ inputs.rebuild-all-paths }}
-        run: |
-          set -euo pipefail
+        run: bun "$ACTIONS_DIR/scripts/release/plan-pr-packages.ts"
 
-          # Normalise every package entry up front so every downstream
-          # job (matrix `runs-on`, the rewrite script, the upload curl)
-          # sees the same shape regardless of whether the user supplied
-          # `project`/`install`/`runner` explicitly.
-          PACKAGES_FULL=$(printf '%s' "$PACKAGES_JSON" | jq -c '
-            map({ dir,
-                  name,
-                  project: (.project // .name),
-                  install: (.install // .project // .name),
-                  runner:  (.runner  // "ubuntu-latest") })')
-
-          if [ "$EVENT" = "push" ] || [ "$FORCE_LABEL_PRESENT" = "true" ]; then
-            [ "$EVENT" = "push" ] \
-              && echo "Push event — rebuilding every package." \
-              || echo "force-ci label present — rebuilding every package."
-            echo "changed=$PACKAGES_FULL" | tee -a "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "Diffing $BASE_SHA..$HEAD_SHA"
-          DIFF=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-          echo "Changed files:"
-          printf '  %s\n' $DIFF || true
-
-          DIRS=$(printf '%s' "$PACKAGES_FULL" | jq -c '[.[].dir]')
-          NAMES=$(printf '%s' "$PACKAGES_FULL" | jq -c '[.[].name]')
-
-          AFFECTED=$(printf '%s\n' "$DIFF" \
-            | env ALCHEMY_PUBLISHABLE_DIRS="$DIRS" \
-                  ALCHEMY_PUBLISHABLE_NAMES="$NAMES" \
-                  bun "$ACTIONS_DIR/scripts/release/compute-changed.ts")
-          echo "compute-changed result: $AFFECTED"
-
-          # Re-attach the normalised config (project/install/runner) to
-          # each affected entry.
-          MATRIX=$(jq -nc \
-            --argjson packages "$PACKAGES_FULL" \
-            --argjson affected "$AFFECTED" '
-              ($packages | map({ key: .dir, value: . }) | from_entries) as $byDir
-              | $affected.changed
-              | map($byDir[.dir])')
-          echo "changed=$MATRIX" | tee -a "$GITHUB_OUTPUT"
-
-  # ── Step 2: compute install/CDN tags + the publish DAG. ─────────────
-  plan:
+  # ── Step 2: build and pack the complete graph in one parallel pass. ─
+  pack:
+    name: pack / ${{ matrix.package.name }}
     needs: detect-changes
-    if: needs.detect-changes.outputs.changed != '[]'
-    runs-on: ubuntu-latest
-    outputs:
-      tags: ${{ steps.tags.outputs.tags }}
-      short: ${{ steps.tags.outputs.short }}
-      wave1: ${{ steps.waves.outputs.wave1 }}
-      wave2: ${{ steps.waves.outputs.wave2 }}
+    if: >-
+      needs.detect-changes.outputs.plan != '' &&
+      fromJson(needs.detect-changes.outputs.plan).packages[0] != null
+    runs-on: ${{ matrix.package.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.detect-changes.outputs.plan).packages }}
     steps:
-      # compute-waves reads each package's package.json from the
-      # consumer checkout to derive the DAG, so we need both.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: ${{ inputs.submodules }}
 
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+
+      - uses: ./.alchemy-actions/actions/setup
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build ${{ matrix.package.name }}
+        working-directory: ${{ matrix.package.dir }}
+        run: ${{ inputs.build-command }}
+
+      - name: Pack ${{ matrix.package.name }}
+        env:
+          PLAN: ${{ needs.detect-changes.outputs.plan }}
+        run: bun "$ACTIONS_DIR/scripts/release/pack-pr-package.ts" "${{ matrix.package.dir }}"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.package.artifact }}
+          path: ${{ matrix.package.dir }}/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Step 3: publish the immutable set, then expose mutable tags. ────
+  publish:
+    needs: [detect-changes, pack]
+    runs-on: ubuntu-latest
+    steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: alchemy-run/actions
@@ -209,157 +204,40 @@ jobs:
           node-version: ${{ inputs.node-version }}
           install: "false"
 
-      - id: tags
-        env:
-          EVENT: ${{ github.event_name }}
-          BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          short="${SHA:0:7}"
-          long="$SHA"
-          tags=("$short" "$long" "$BRANCH")
-          [ "$EVENT" = "pull_request" ] && tags+=("pr-${PR_NUMBER}")
-          json=$(printf '%s\n' "${tags[@]}" | jq -R . | jq -s -c .)
-          echo "tags=$json" | tee -a "$GITHUB_OUTPUT"
-          echo "short=$short" | tee -a "$GITHUB_OUTPUT"
-
-      - id: waves
-        env:
-          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ needs.detect-changes.outputs.changed }}
-        run: |
-          set -euo pipefail
-          bun "$ACTIONS_DIR/scripts/release/compute-waves.ts" | tee -a "$GITHUB_OUTPUT"
-
-  # ── Step 3: publish in waves. Same shape as release.yml. ────────────
-  publish-wave-1:
-    name: wave-1 / ${{ matrix.package.name }}
-    needs: [detect-changes, plan]
-    if: needs.plan.outputs.wave1 != '[]'
-    runs-on: ${{ matrix.package.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        package: ${{ fromJson(needs.plan.outputs.wave1) }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          submodules: ${{ inputs.submodules }}
+          pattern: pr-package-*
+          path: .pr-packages
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: alchemy-run/actions
-          ref: ${{ inputs.actions-ref }}
-          path: ${{ env.ACTIONS_DIR }}
-
-      - uses: ./.alchemy-actions/actions/setup
-        with:
-          node-version: ${{ inputs.node-version }}
-
-      - name: Build ${{ matrix.package.name }}
-        working-directory: ${{ matrix.package.dir }}
-        run: ${{ inputs.build-command }}
-
-      - name: Pin sibling workspace deps to pr-package URLs
+      - name: Publish complete package graph
         env:
-          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
-          ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
-          ALCHEMY_PR_TAG: ${{ needs.plan.outputs.short }}
-        run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ matrix.package.dir }}"
-
-      - name: Publish ${{ matrix.package.name }}
-        env:
+          PLAN: ${{ needs.detect-changes.outputs.plan }}
           PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
           TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
-          TAGS: ${{ needs.plan.outputs.tags }}
           TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-          PROJECT: ${{ matrix.package.project }}
-        working-directory: ${{ matrix.package.dir }}
-        run: |
-          set -euo pipefail
-          rm -f -- *.tgz
-          bun pm pack --destination .
-          tgz=$(ls *.tgz)
-          echo "Publishing ${PROJECT} ($tgz) with tags $TAGS ttl=${TTL:-default}"
-          curl -fsSL --show-error -X PUT \
-            "https://${PR_PACKAGE_HOST}/projects/${PROJECT}/packages" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "X-Tags: ${TAGS}" \
-            ${TTL:+-H "X-TTL: ${TTL}"} \
-            -H "Content-Type: application/gzip" \
-            --data-binary "@${tgz}"
-
-  publish-wave-2:
-    name: wave-2 / ${{ matrix.package.name }}
-    needs: [detect-changes, plan, publish-wave-1]
-    if: >-
-      always() && needs.plan.result == 'success' &&
-      (needs.publish-wave-1.result == 'success' ||
-       needs.publish-wave-1.result == 'skipped') &&
-      needs.plan.outputs.wave2 != '[]'
-    runs-on: ${{ matrix.package.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        package: ${{ fromJson(needs.plan.outputs.wave2) }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          submodules: ${{ inputs.submodules }}
-
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: alchemy-run/actions
-          ref: ${{ inputs.actions-ref }}
-          path: ${{ env.ACTIONS_DIR }}
-
-      - uses: ./.alchemy-actions/actions/setup
-        with:
-          node-version: ${{ inputs.node-version }}
-
-      - name: Build ${{ matrix.package.name }}
-        working-directory: ${{ matrix.package.dir }}
-        run: ${{ inputs.build-command }}
-
-      - name: Pin sibling workspace deps to pr-package URLs
-        env:
-          ALCHEMY_PUBLISHABLE_PACKAGES: ${{ inputs.packages }}
-          ALCHEMY_PR_INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
-          ALCHEMY_PR_TAG: ${{ needs.plan.outputs.short }}
-        run: bun "$ACTIONS_DIR/scripts/release/rewrite-pr-package-deps.ts" "${{ matrix.package.dir }}"
-
-      - name: Publish ${{ matrix.package.name }}
-        env:
-          PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
-          TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
-          TAGS: ${{ needs.plan.outputs.tags }}
-          TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
-          PROJECT: ${{ matrix.package.project }}
-        working-directory: ${{ matrix.package.dir }}
-        run: |
-          set -euo pipefail
-          rm -f -- *.tgz
-          bun pm pack --destination .
-          tgz=$(ls *.tgz)
-          echo "Publishing ${PROJECT} ($tgz) with tags $TAGS ttl=${TTL:-default}"
-          curl -fsSL --show-error -X PUT \
-            "https://${PR_PACKAGE_HOST}/projects/${PROJECT}/packages" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "X-Tags: ${TAGS}" \
-            ${TTL:+-H "X-TTL: ${TTL}"} \
-            -H "Content-Type: application/gzip" \
-            --data-binary "@${tgz}"
+        run: bun "$ACTIONS_DIR/scripts/release/publish-pr-package-graph.ts"
 
   # ── PR-only: sticky install-instructions comment. ───────────────────
   comment:
-    needs: [detect-changes, plan, publish-wave-1, publish-wave-2]
+    needs: [detect-changes, publish]
     if: >-
       always() && github.event_name == 'pull_request' &&
-      needs.detect-changes.outputs.changed != '[]' &&
-      needs.plan.result == 'success'
+      needs.detect-changes.outputs.plan != '' &&
+      fromJson(needs.detect-changes.outputs.plan).packages[0] != null &&
+      needs.publish.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: alchemy-run/actions
+          ref: ${{ inputs.actions-ref }}
+          path: ${{ env.ACTIONS_DIR }}
+
+      - uses: ./.alchemy-actions/actions/setup
+        with:
+          node-version: ${{ inputs.node-version }}
+          install: "false"
+
       - name: Generate bot token
         id: bot-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -372,38 +250,8 @@ jobs:
           GH_TOKEN: ${{ steps.bot-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          SHORT_SHA: ${{ needs.plan.outputs.short }}
-          INSTALL_HOST: ${{ inputs.install-host || inputs.pr-package-host }}
-          CHANGED: ${{ needs.detect-changes.outputs.changed }}
-        run: |
-          set -euo pipefail
-          MARKER="<!-- pr-package-comment -->"
-
-          {
-            printf '%s\n\n' "$MARKER"
-            printf 'Install the packages built from this commit:\n\n'
-            printf '%s' "$CHANGED" | jq -r '.[] | @json' | while IFS= read -r row; do
-              name=$(printf '%s' "$row" | jq -r '.name')
-              install=$(printf '%s' "$row" | jq -r '.install')
-              printf '**%s**\n' "$name"
-              printf '```sh\n'
-              printf 'bun add %s@https://%s/%s/%s\n' "$name" "$INSTALL_HOST" "$install" "$SHORT_SHA"
-              printf '```\n\n'
-            done
-          } > /tmp/pr-package-body.md
-
-          BODY=$(cat /tmp/pr-package-body.md)
-
-          existing=$(gh api --paginate \
-            "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            --jq ".[] | select(.user.login == \"alchemy-version-bot[bot]\") | select(.body | startswith(\"${MARKER}\")) | .id" \
-            | head -1)
-
-          if [ -n "$existing" ]; then
-            gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" -f body="$BODY"
-          else
-            gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY"
-          fi
+          PLAN: ${{ needs.detect-changes.outputs.plan }}
+        run: bun "$ACTIONS_DIR/scripts/release/comment-pr-packages.ts"
 
   # PR close intentionally does nothing — pr-package tags persist past
   # PR close so existing install URLs keep resolving. The bucket's TTL
