@@ -20,11 +20,20 @@ inputs:
     required: true
   force-latest:
     description: >-
-      Publish under npm's `latest` dist-tag regardless of channel. When
-      the version is already on the registry, moves `latest` onto it
+      Publish under npm's `latest` dist-tag regardless of channel, then
+      move the channel's own tag (e.g. `next`) onto the version too. When
+      the version is already on the registry, moves the tags onto it
       instead of skipping.
     required: false
     default: "false"
+  npm-token:
+    description: >-
+      npm token used for `npm dist-tag add` (secondary tag moves under
+      force-latest). OIDC trusted publishing only covers `npm publish`
+      (npm/cli#8547), so without this the channel tag move is skipped
+      with a workflow warning.
+    required: false
+    default: ""
   dirs-json:
     description: JSON array of ALL publishable dirs (for workspace sibling resolution)
     required: true
@@ -96,4 +105,5 @@ runs:
         ALCHEMY_PUBLISHABLE_DIRS: ${{ inputs.dirs-json }}
         ALCHEMY_PUBLISHABLE_NAMES: ${{ inputs.names-json }}
         ALCHEMY_FORCE_LATEST: ${{ inputs.force-latest }}
+        ALCHEMY_NPM_TOKEN: ${{ inputs.npm-token }}
       run: bun .alchemy-actions/scripts/release/publish-package.ts "${{ inputs.dir }}" "${{ inputs.channel }}"

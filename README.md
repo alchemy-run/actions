@@ -183,11 +183,20 @@ posted only after the complete graph is available.
 | `ALCHEMY_VERSION_BOT_PRIVATE_KEY`   | release + pr-package  | GitHub App private key                        |
 | `PR_PACKAGE_TOKEN`                  | pr-package            | Bearer token for the pkg.ing service          |
 | `DISCORD_WEBHOOK_URL`               | release (optional)    | Skip Discord post if unset                    |
+| `NPM_TOKEN`                         | release (optional)    | Only for dist-tag moves under `force-latest`  |
 | `GITHUB_TOKEN`                      | release               | Provided automatically                        |
 
-npm publishes use OIDC trusted publishing — no `NPM_TOKEN` required, but each
-package must have a Trusted Publisher configured against this repo on the npm
-side.
+npm publishes use OIDC trusted publishing — no `NPM_TOKEN` required for the
+publish itself, but each package must have a Trusted Publisher configured
+against this repo on the npm side.
+
+OIDC does **not** cover `npm dist-tag add` ([npm/cli#8547]), which
+`force-latest` needs to move the channel tag (e.g. `next`) alongside
+`latest`. Set `NPM_TOKEN` to a granular access token with read/write access
+to the published packages to enable that; without it the secondary tag move
+is skipped with a workflow warning that includes the manual command.
+
+[npm/cli#8547]: https://github.com/npm/cli/issues/8547
 
 ## Scripts
 
