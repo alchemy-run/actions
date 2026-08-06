@@ -48,17 +48,15 @@ export function graphEdgeTag(
   dependencyTag: string,
   parentName: string,
 ): string {
-  // npm scopes add no useful identity here and can make Bun's package-store
-  // file name needlessly long. Bound unusually long package names too: Bun
-  // uses the tag in a package-store file name with a 255-byte limit.
+  // Keep the readable basename short, but hash the full package name so
+  // parents with the same basename in different npm scopes stay distinct.
+  // Bun uses the tag in a package-store file name with a 255-byte limit.
   const parent = parentName.replace(/^@[^/]+\//, "");
-  const identity =
-    parent.length <= 80
-      ? parent
-      : `${parent.slice(0, 80)}-${createHash("sha256")
-          .update(parentName)
-          .digest("hex")
-          .slice(0, 8)}`;
+  const hash = createHash("sha256")
+    .update(parentName)
+    .digest("hex")
+    .slice(0, 8);
+  const identity = `${parent.slice(0, 80)}-${hash}`;
   return `${dependencyTag}-from-${identity}`;
 }
 
