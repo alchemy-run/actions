@@ -97,8 +97,11 @@ on:
         description: >-
           Publish every package under npm's `latest` dist-tag, whatever
           the channel — use to promote a prerelease (e.g. an rc) to
-          latest. If a version is already on the registry, its `latest`
-          tag is moved rather than the publish being skipped.
+          latest. The channel's own tag (e.g. `next`) is moved onto the
+          version too; that secondary move needs an NPM_TOKEN secret
+          (OIDC only covers `npm publish`) and degrades to a workflow
+          warning without one. If a version is already on the registry,
+          its tags are moved rather than the publish being skipped.
         required: false
         type: boolean
         default: false
@@ -353,6 +356,7 @@ jobs:
           dirs-json: ${{ needs.bump.outputs.dirs }}
           names-json: ${{ needs.bump.outputs.names }}
           force-latest: ${{ inputs.force-latest }}
+          npm-token: ${{ secrets.NPM_TOKEN }}
           build-command: ${{ inputs.build-mode == 'per-package' && inputs.build-command || '' }}
           node-version: ${{ inputs.node-version }}
           submodules: ${{ inputs.submodules }}
@@ -388,6 +392,7 @@ jobs:
           dirs-json: ${{ needs.bump.outputs.dirs }}
           names-json: ${{ needs.bump.outputs.names }}
           force-latest: ${{ inputs.force-latest }}
+          npm-token: ${{ secrets.NPM_TOKEN }}
           build-command: ${{ inputs.build-mode == 'per-package' && inputs.build-command || '' }}
           node-version: ${{ inputs.node-version }}
           submodules: ${{ inputs.submodules }}

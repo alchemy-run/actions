@@ -15,11 +15,17 @@
  *     tag → derived from the version's prerelease suffix (e.g.
  *           2.0.0-experimental.1 → experimental-1)
  *
- * ALCHEMY_FORCE_LATEST=true additionally tags the version `latest` — and,
- * when {name}@{version} is already on the registry, moves the existing
- * tags onto it instead of skipping. The channel's own tag (e.g. `next`
- * for beta) is still applied, so prerelease tags never go stale when a
- * prerelease is forced onto `latest`.
+ * ALCHEMY_FORCE_LATEST=true publishes under `latest` and then moves the
+ * channel's own tag (e.g. `next` for beta) onto the version too, so
+ * prerelease tags don't go stale when a prerelease is forced onto
+ * `latest`. When {name}@{version} is already on the registry, it moves
+ * both tags instead of skipping.
+ *
+ * Only the publish-time `--tag` is covered by npm OIDC trusted
+ * publishing; `npm dist-tag add` is not (npm/cli#8547) and needs a real
+ * token. Secondary tag moves therefore use ALCHEMY_NPM_TOKEN when set,
+ * and otherwise degrade to a workflow warning with the manual command —
+ * a missing token never fails the release.
  *
  * Usage: bun publish-package.ts <package-dir> <channel>
  *
@@ -96,6 +102,41 @@ const channelTag =
       ? "next"
       : version.replace(/^\d+\.\d+\.\d+-/, "").replace(/\./g, "-");
 
+// `latest` wins the publish-time --tag under force-latest because that's
+// the only tag OIDC can set; the channel tag is moved afterwards on a
+// best-effort basis. If that move fails, default installs are still
+// correct and only the channel tag lags.
+const publishTag = forceLatest ? "latest" : channelTag;
+const extraTags =
+  forceLatest && channelTag !== "latest" ? [channelTag] : [];
+
+const npmToken = process.env.ALCHEMY_NPM_TOKEN?.trim() || undefined;
+
+/**
+ * Move a dist-tag onto {name}@{version}. npm OIDC trusted publishing only
+ * covers `npm publish` — a bare `npm dist-tag add` in CI gets E401
+ * (npm/cli#8547) — so this authenticates with ALCHEMY_NPM_TOKEN when set
+ * (via the ${NODE_AUTH_TOKEN} reference setup-node wrote into .npmrc) and
+ * downgrades failures to a workflow warning instead of failing the release.
+ */
+async function addDistTag(tag: string): Promise<void> {
+  const spec = `${name}@${version}`;
+  const cmd = $`npm dist-tag add ${spec} ${tag}`.nothrow();
+  const result = await (npmToken
+    ? cmd.env({ ...process.env, NODE_AUTH_TOKEN: npmToken })
+    : cmd);
+  if (result.exitCode === 0) {
+    console.log(`dist-tag ${tag} → ${spec}`);
+    return;
+  }
+  const hint = npmToken
+    ? "the configured npm token was rejected"
+    : "npm OIDC does not cover dist-tag (npm/cli#8547); configure an NPM_TOKEN secret";
+  console.log(
+    `::warning title=dist-tag ${tag} not moved::${hint}. Run manually: npm dist-tag add ${spec} ${tag}`,
+  );
+}
+
 const existing = await $`npm view ${`${name}@${version}`} version`
   .nothrow()
   .quiet();
@@ -107,9 +148,9 @@ if (existing.exitCode === 0 && existing.stdout.toString().trim().length > 0) {
     console.log(
       `${name}@${version} already published; forcing dist-tag latest`,
     );
-    await $`npm dist-tag add ${`${name}@${version}`} latest`;
-    if (channelTag !== "latest") {
-      await $`npm dist-tag add ${`${name}@${version}`} ${channelTag}`;
+    await addDistTag("latest");
+    for (const tag of extraTags) {
+      await addDistTag(tag);
     }
     process.exit(0);
   }
@@ -192,16 +233,14 @@ if (tarballs.length !== 1) {
 }
 const tarball = tarballs[0]!;
 
-console.log(`Publishing tarball: ${tarball} (dist-tag: ${channelTag})`);
+console.log(`Publishing tarball: ${tarball} (dist-tag: ${publishTag})`);
 
-await $pkg`npm publish ${tarball} --access public --tag ${channelTag}`;
+await $pkg`npm publish ${tarball} --access public --tag ${publishTag}`;
 
-// Force-latest is additive: the version still gets its channel tag above,
-// so a prerelease forced onto `latest` doesn't leave `next` pointing at an
-// older version.
-if (forceLatest && channelTag !== "latest") {
-  console.log(`Forcing dist-tag latest onto ${name}@${version}`);
-  await $pkg`npm dist-tag add ${`${name}@${version}`} latest`;
+// Force-latest is additive: after publishing under `latest`, move the
+// channel tag (e.g. `next`) too so it doesn't strand on an older version.
+for (const tag of extraTags) {
+  await addDistTag(tag);
 }
 
 unlinkSync(join(packageDir, tarball));
