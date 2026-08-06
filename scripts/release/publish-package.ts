@@ -15,9 +15,11 @@
  *     tag → derived from the version's prerelease suffix (e.g.
  *           2.0.0-experimental.1 → experimental-1)
  *
- * ALCHEMY_FORCE_LATEST=true overrides the dist-tag to `latest` — and,
+ * ALCHEMY_FORCE_LATEST=true additionally tags the version `latest` — and,
  * when {name}@{version} is already on the registry, moves the existing
- * `latest` tag onto it instead of skipping.
+ * tags onto it instead of skipping. The channel's own tag (e.g. `next`
+ * for beta) is still applied, so prerelease tags never go stale when a
+ * prerelease is forced onto `latest`.
  *
  * Usage: bun publish-package.ts <package-dir> <channel>
  *
@@ -86,16 +88,29 @@ console.log(`--- Publishing ${name}@${version} (channel: ${channel}) ---`);
 
 const forceLatest = process.env.ALCHEMY_FORCE_LATEST === "true";
 
+// The tag the channel would use on its own, independent of force-latest.
+const channelTag =
+  channel === "release"
+    ? "latest"
+    : channel === "beta" || channel === "alpha" || channel === "rc"
+      ? "next"
+      : version.replace(/^\d+\.\d+\.\d+-/, "").replace(/\./g, "-");
+
 const existing = await $`npm view ${`${name}@${version}`} version`
   .nothrow()
   .quiet();
 if (existing.exitCode === 0 && existing.stdout.toString().trim().length > 0) {
   if (forceLatest) {
-    // The tarball is already on npm; all that's left is to move the tag.
+    // The tarball is already on npm; all that's left is to move the tags.
+    // Move the channel's own tag too: leaving it behind would strand e.g.
+    // `next` on an older prerelease than `latest`.
     console.log(
       `${name}@${version} already published; forcing dist-tag latest`,
     );
     await $`npm dist-tag add ${`${name}@${version}`} latest`;
+    if (channelTag !== "latest") {
+      await $`npm dist-tag add ${`${name}@${version}`} ${channelTag}`;
+    }
     process.exit(0);
   }
   console.log(`${name}@${version} already published, skipping`);
@@ -177,16 +192,17 @@ if (tarballs.length !== 1) {
 }
 const tarball = tarballs[0]!;
 
-const distTag = forceLatest
-  ? "latest"
-  : channel === "release"
-    ? "latest"
-    : channel === "beta" || channel === "alpha" || channel === "rc"
-      ? "next"
-      : version.replace(/^\d+\.\d+\.\d+-/, "").replace(/\./g, "-");
-console.log(`Publishing tarball: ${tarball} (dist-tag: ${distTag})`);
+console.log(`Publishing tarball: ${tarball} (dist-tag: ${channelTag})`);
 
-await $pkg`npm publish ${tarball} --access public --tag ${distTag}`;
+await $pkg`npm publish ${tarball} --access public --tag ${channelTag}`;
+
+// Force-latest is additive: the version still gets its channel tag above,
+// so a prerelease forced onto `latest` doesn't leave `next` pointing at an
+// older version.
+if (forceLatest && channelTag !== "latest") {
+  console.log(`Forcing dist-tag latest onto ${name}@${version}`);
+  await $pkg`npm dist-tag add ${`${name}@${version}`} latest`;
+}
 
 unlinkSync(join(packageDir, tarball));
 
