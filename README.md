@@ -73,8 +73,10 @@ wave 1: @distilled.cloud/core
 wave 2: @distilled.cloud/aws, …/cloudflare, …/neon, …       (parallel)
 ```
 
-The npm release workflow pre-declares two wave jobs and skips the empty
-ones. Deeper npm release DAGs require adding matching jobs.
+The npm release workflow pre-declares four wave jobs and skips the empty
+ones (cloudflare-tools is the deepest consumer today at four:
+rolldown-plugin → runtime/framework-core → vite-plugin + frameworks →
+astro/waku). Deeper npm release DAGs require adding matching jobs.
 
 Channels:
 
