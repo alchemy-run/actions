@@ -19,10 +19,11 @@
  *   wave1=[{"dir":"packages/core","name":"@x/core","runner":"ubuntu-latest"}]
  *   wave2=[{"dir":"packages/aws","name":"@x/aws","runner":"ubuntu-22-large"}, ...]
  *
- * Errors out (non-zero exit) if the graph has a cycle or exceeds two
- * levels (every project we currently release fits in 2 waves — anchor
- * + everything-else; if you genuinely need a third, bump MAX_WAVES
- * here and add a matching publish-wave-3 job to release.yml).
+ * Errors out (non-zero exit) if the graph has a cycle or exceeds
+ * MAX_WAVES levels (cloudflare-tools is the deepest consumer today at
+ * 4: rolldown-plugin → runtime/framework-core → vite-plugin/frameworks
+ * → astro/waku; if you genuinely need a fifth, bump MAX_WAVES here and
+ * add a matching publish-wave-5 job to release.yml).
  *
  * Reads ALCHEMY_PUBLISHABLE_PACKAGES (full JSON array of objects with
  * at least `dir` and `name`). Defaults `runner` to "ubuntu-latest" on
@@ -31,7 +32,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const MAX_WAVES = 2;
+const MAX_WAVES = 4;
 
 type Package = {
   dir: string;
