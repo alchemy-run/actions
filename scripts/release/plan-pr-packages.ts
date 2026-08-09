@@ -19,7 +19,6 @@ type PackageInput = {
   name: string;
   project?: string;
   install?: string;
-  runner?: string;
 };
 
 async function planPackages(
@@ -103,7 +102,6 @@ const packages: Package[] = configured.map((p) => {
     name: p.name,
     project: p.project ?? p.name,
     install: p.install ?? p.project ?? p.name,
-    runner: p.runner ?? "ubuntu-latest",
     artifact: `pr-package-${encoded}`,
   };
 });

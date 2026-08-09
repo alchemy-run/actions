@@ -1,24 +1,8 @@
 name: pr-package (reusable)
 
-# Reusable workflow that publishes a complete set of per-commit tarballs
-# to a pr-package service (default pkg.ing) instead of npm. No commit or
-# GitHub Release.
-#
-# Behaviour:
-#   - push to main / force-ci label  → republish every package
-#   - pull_request                    → diff-driven subset, transitively
-#                                       expanded so the workspace-dep
-#                                       URL rewriter has a same-SHA
-#                                       tarball to point at
-#   - pull_request.closed             → no-op. pr-package tags persist
-#                                       past PR close so install URLs
-#                                       keep resolving; the bucket's
-#                                       TTL handles orphan cleanup.
-#
-# Packages build and pack in parallel after every configured workspace
-# dependency is rewritten to a deterministic full-SHA graph URL. Only
-# after all tarballs exist do we upload the dependency set, followed by
-# public commit, branch, and PR tags.
+# Publishes a complete set of per-commit tarballs from one job on one runner.
+# Package work is derived from config at runtime, so adding a package does not
+# add another matrix job or require another predeclared publish wave.
 
 on:
   workflow_call:
@@ -26,36 +10,27 @@ on:
       packages:
         description: >-
           JSON array of `{ "dir": "...", "name": "...", "project": "...",
-          "install": "...", "runner": "..." }`. `dir` and `name` are
-          required. `project` (defaults to `name`) is used as the
-          pr-package project name on upload. `install` (defaults to
-          `project`) is the path used in `bun add` URLs and in the
-          rewritten workspace-dep URLs. `runner` (defaults to
-          `ubuntu-latest`) routes that package to a specific runner.
+          "install": "..." }`. `dir` and `name` are required. `project`
+          defaults to `name`; `install` defaults to `project`.
         required: true
         type: string
       pr-package-host:
-        description: "Host the tarballs upload to"
+        description: Host the tarballs upload to
         required: false
         type: string
         default: pkg.ing
       install-host:
         description: >-
-          Host shown in the PR-comment install URLs and used as the
-          target host when rewriting sibling workspace-deps. Defaults
-          to pr-package-host. Useful for projects with a custom CNAME
-          like pkg.distilled.cloud.
+          Host used by install URLs and rewritten workspace dependencies.
+          Defaults to pr-package-host.
         required: false
         type: string
         default: ""
       build-command:
-        description: >-
-          Build command run in each changed package's directory.
-          Default `bun run build`; tsc-style project references will
-          build deps transitively as a side effect.
+        description: Build command run in each selected package directory
         required: false
         type: string
-        default: "bun run build"
+        default: bun run build
       node-version:
         description: Node version
         required: false
@@ -70,26 +45,21 @@ on:
         type: string
         default: ""
       force-ci-label:
-        description: "PR label that forces rebuild of every package"
+        description: PR label that forces rebuild of every package
         required: false
         type: string
         default: force-ci
       submodules:
         description: >-
-          Passed through to actions/checkout's `submodules` for the
-          consumer checkouts in the publish jobs (`false` | `true` |
-          `recursive`). Needed when the consumer's bun workspace
-          includes packages from a submodule.
+          Passed through to actions/checkout's `submodules` (`false` | `true` |
+          `recursive`).
         required: false
         type: string
         default: "false"
       rebuild-all-paths:
         description: >-
           Newline-separated paths appended to compute-changed's default
-          rebuild-all globs (`bun.lock`, root `package.json`, …). A PR
-          touching any of them republishes every package. Use for
-          submodule pointers (e.g. `distilled`) whose changes don't
-          fall under any package dir.
+          rebuild-all globs.
         required: false
         type: string
         default: ""
@@ -102,21 +72,12 @@ env:
   ACTIONS_DIR: .alchemy-actions
 
 jobs:
-  # ── Step 1: which packages this run publishes. ──────────────────────
-  # push / force-ci → full set. PR → diff-driven subset with
-  # transitive workspace-dep closure.
-  detect-changes:
-    # Skip fork PRs entirely — they can't access PR_PACKAGE_TOKEN or
-    # the alchemy-version-bot secrets, so every downstream step would
-    # error before doing anything useful. Internal PRs and pushes to
-    # main behave as before.
+  publish:
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'pull_request' && github.event.action != 'closed' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    outputs:
-      plan: ${{ steps.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -134,7 +95,8 @@ jobs:
           node-version: ${{ inputs.node-version }}
           install: "false"
 
-      - id: plan
+      - name: Plan package graph
+        id: plan
         env:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -148,100 +110,30 @@ jobs:
           ALCHEMY_PR_REBUILD_ALL_GLOBS: ${{ inputs.rebuild-all-paths }}
         run: bun "$ACTIONS_DIR/scripts/release/plan-pr-packages.ts"
 
-  # ── Step 2: build and pack the complete graph in one parallel pass. ─
-  pack:
-    name: pack / ${{ matrix.package.name }}
-    needs: detect-changes
-    if: >-
-      needs.detect-changes.outputs.plan != '' &&
-      fromJson(needs.detect-changes.outputs.plan).packages[0] != null
-    runs-on: ${{ matrix.package.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        package: ${{ fromJson(needs.detect-changes.outputs.plan).packages }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          submodules: ${{ inputs.submodules }}
+      - name: Install dependencies
+        if: fromJson(steps.plan.outputs.plan).packages[0] != null
+        run: bun install
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ inputs.actions-ref || job.workflow_sha }}
-          path: ${{ env.ACTIONS_DIR }}
-
-      - uses: ./.alchemy-actions/actions/setup
-        with:
-          node-version: ${{ inputs.node-version }}
-
-      - name: Build ${{ matrix.package.name }}
-        working-directory: ${{ matrix.package.dir }}
-        run: ${{ inputs.build-command }}
-
-      - name: Pack ${{ matrix.package.name }}
+      - name: Build and pack packages
+        if: fromJson(steps.plan.outputs.plan).packages[0] != null
         env:
-          PLAN: ${{ needs.detect-changes.outputs.plan }}
-        run: bun "$ACTIONS_DIR/scripts/release/pack-pr-package.ts" "${{ matrix.package.dir }}"
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ matrix.package.artifact }}
-          path: ${{ matrix.package.dir }}/*.tgz
-          if-no-files-found: error
-          retention-days: 1
-
-  # ── Step 3: publish the immutable set, then expose mutable tags. ────
-  publish:
-    needs: [detect-changes, pack]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ inputs.actions-ref || job.workflow_sha }}
-          path: ${{ env.ACTIONS_DIR }}
-
-      - uses: ./.alchemy-actions/actions/setup
-        with:
-          node-version: ${{ inputs.node-version }}
-          install: "false"
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: pr-package-*
-          path: .pr-packages
+          PLAN: ${{ steps.plan.outputs.plan }}
+          BUILD_COMMAND: ${{ inputs.build-command }}
+        run: bun "$ACTIONS_DIR/scripts/release/build-pr-packages.ts"
 
       - name: Publish complete package graph
+        if: fromJson(steps.plan.outputs.plan).packages[0] != null
         env:
-          PLAN: ${{ needs.detect-changes.outputs.plan }}
+          PLAN: ${{ steps.plan.outputs.plan }}
           PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
           TOKEN: ${{ secrets.PR_PACKAGE_TOKEN }}
           TTL: ${{ github.event_name == 'pull_request' && '1 week' || '' }}
         run: bun "$ACTIONS_DIR/scripts/release/publish-pr-package-graph.ts"
 
-  # ── PR-only: sticky install-instructions comment. ───────────────────
-  comment:
-    needs: [detect-changes, publish]
-    if: >-
-      always() && github.event_name == 'pull_request' &&
-      needs.detect-changes.outputs.plan != '' &&
-      fromJson(needs.detect-changes.outputs.plan).packages[0] != null &&
-      needs.publish.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ inputs.actions-ref || job.workflow_sha }}
-          path: ${{ env.ACTIONS_DIR }}
-
-      - uses: ./.alchemy-actions/actions/setup
-        with:
-          node-version: ${{ inputs.node-version }}
-          install: "false"
-
       - name: Generate bot token
+        if: >-
+          github.event_name == 'pull_request' &&
+          fromJson(steps.plan.outputs.plan).packages[0] != null
         id: bot-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -249,13 +141,15 @@ jobs:
           private-key: ${{ secrets.ALCHEMY_VERSION_BOT_PRIVATE_KEY }}
 
       - name: Comment on PR
+        if: >-
+          github.event_name == 'pull_request' &&
+          fromJson(steps.plan.outputs.plan).packages[0] != null
         env:
           GH_TOKEN: ${{ steps.bot-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PLAN: ${{ needs.detect-changes.outputs.plan }}
+          PLAN: ${{ steps.plan.outputs.plan }}
         run: bun "$ACTIONS_DIR/scripts/release/comment-pr-packages.ts"
 
-  # PR close intentionally does nothing — pr-package tags persist past
-  # PR close so existing install URLs keep resolving. The bucket's TTL
-  # handles orphan cleanup on its own schedule.
+  # Fork PRs and closed PRs intentionally do nothing. Forks cannot access the
+  # publishing secrets; tags persist after close until the service TTL expires.

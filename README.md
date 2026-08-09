@@ -163,19 +163,17 @@ jobs:
 | `name`     | —                | npm package name (used for the workspace-dep graph)      |
 | `project`  | = `name`         | Project name in the pr-package upload URL                |
 | `install`  | = `project`      | Path used in the `bun add` URL on PR comments            |
-| `runner`   | `ubuntu-latest`  | Override the GitHub runner (e.g. for huge builds)        |
 
 Top-level inputs include `pr-package-host` (upload target, default
 `pkg.ing`), `install-host` (CDN host for PR-comment URLs; defaults to
 `pr-package-host`), `build-command` (default `bun run build`, run
 per-package), and `force-ci-label` (default `force-ci`).
 
-PR-package builds and packs every selected package in one parallel pass,
-with configured workspace dependencies rewritten to deterministic URLs for
-the same commit graph. It uploads the complete dependency set first, then
-exposes full/short commit, branch, and PR tags. Graph depth is therefore not
-limited by a fixed number of workflow jobs, and install instructions are
-posted only after the complete graph is available.
+All selected packages build and publish in one job on one runner. The workflow
+rewrites configured workspace dependencies to deterministic URLs for the same
+commit graph, uploads the complete dependency set, and only then exposes
+full/short commit, branch, and PR tags. It does not use package matrices,
+publish waves, workflow artifacts, or per-package runner overrides.
 
 ## Required secrets (inherited from the caller)
 
@@ -224,6 +222,7 @@ actions/
 scripts/release/
   bump.ts
   publish-package.ts
+  build-pr-packages.ts
   release-notes.ts
   github-release.ts
   discord-notify.ts

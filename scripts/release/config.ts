@@ -15,7 +15,6 @@ export type Package = {
   name: string;
   project: string;
   install: string;
-  runner: string;
   artifact: string;
 };
 
