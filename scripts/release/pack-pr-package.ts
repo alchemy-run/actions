@@ -5,6 +5,8 @@
  */
 import { $ } from "bun";
 import {
+  copyFileSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -84,6 +86,10 @@ try {
     fail(`Could not extract ${tarballs[0]}`);
   }
 
+  const readme = resolve("README.md");
+  if (existsSync(readme)) {
+    copyFileSync(readme, join(extracted, "package", "README.md"));
+  }
   rewriteDependencies(plan, dir, join(extracted, "package", "package.json"));
   unlinkSync(tarball);
   const repack = await $`env COPYFILE_DISABLE=1 tar -czf ${tarball} -C ${extracted} package`.nothrow();
