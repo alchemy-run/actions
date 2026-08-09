@@ -104,7 +104,7 @@ const packages: Package[] = await Promise.all(
       group: p.group?.trim(),
       project: p.project ?? p.name,
       install: p.install ?? p.project ?? p.name,
-      readme: p.readme?.trim() ?? "README.md",
+      readme: p.readme?.trim(),
       submodule: p.submodule ?? false,
       artifact: `pr-package-${encoded}`,
       commit,

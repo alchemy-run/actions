@@ -110,8 +110,9 @@ try {
     fail(`Could not extract ${tarballs[0]}`);
   }
 
-  const readme = resolve(pkg.readme);
-  if (existsSync(readme)) {
+  if (pkg.readme) {
+    const readme = resolve(pkg.readme);
+    if (!existsSync(readme)) fail(`README ${pkg.readme} does not exist`);
     copyFileSync(readme, join(extracted, "package", "README.md"));
   }
   rewriteDependencies(plan, dir, join(extracted, "package", "package.json"));
