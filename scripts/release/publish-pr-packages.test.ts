@@ -45,7 +45,9 @@ describe("content-addressed PR package publishing", () => {
         return Promise.resolve(new Response(null, { status: 404 }));
       }
       if (request.url.endsWith("/tags")) {
-        pointed.push(JSON.parse(request.headers.get("x-tags")!) as string[]);
+        pointed.push(
+          JSON.parse(request.headers.get("alchemy-tags")!) as string[],
+        );
       }
       return Promise.resolve(Response.json({ ok: true }));
     }) as typeof fetch;
@@ -113,7 +115,13 @@ describe("content-addressed PR package publishing", () => {
     expect(
       requests.filter((request) => request.method === "PUT" && !request.url.endsWith("/tags")),
     ).toHaveLength(1);
-    expect(requests.at(-1)?.headers.get("x-tarball-hash")).toBe(archive.hash);
-    expect(requests.at(-1)?.headers.get("x-tarball-size")).toBe(String(archive.size));
+    expect(requests[0]?.url).toBe(
+      `https://pkg.example.com/projects/%40scope/example/packages/${archive.hash}`,
+    );
+    expect(requests.at(-1)?.headers.get("alchemy-tarball-hash")).toBe(
+      archive.hash,
+    );
+    expect(requests.at(-1)?.headers.get("alchemy-ttl")).toBe("1 week");
+    expect(requests.at(-1)?.headers.has("alchemy-tarball-size")).toBe(false);
   });
 });

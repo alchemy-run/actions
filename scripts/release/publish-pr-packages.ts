@@ -47,7 +47,7 @@ export async function ensureTarball(
   pkg: Package,
   archive: Tarball,
 ): Promise<void> {
-  const url = `${projectUrl(host, pkg.project)}/packages/${archive.hash}/${archive.size}`;
+  const url = `${projectUrl(host, pkg.project)}/packages/${archive.hash}`;
   const authorization = { Authorization: `Bearer ${token}` };
   const probe = await fetch(url, { method: "HEAD", headers: authorization });
   if (probe.ok) {
@@ -94,15 +94,14 @@ export async function pointTags(
 ): Promise<void> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    "X-Tags": JSON.stringify(tags),
-    "X-Tarball-Hash": archive.hash,
-    "X-Tarball-Size": String(archive.size),
+    "Alchemy-Tags": JSON.stringify(tags),
+    "Alchemy-Tarball-Hash": archive.hash,
   };
-  if (ttl) headers["X-TTL"] = ttl;
+  if (ttl) headers["Alchemy-TTL"] = ttl;
 
   console.log(
     `Pointing ${pkg.project} tags ${JSON.stringify(tags)} at ` +
-      `(${archive.hash.slice(0, 12)}, ${archive.size} bytes) ttl=${ttl ?? "default"}`,
+      `${archive.hash.slice(0, 12)} ttl=${ttl ?? "default"}`,
   );
   const response = await fetch(`${projectUrl(host, pkg.project)}/tags`, {
     method: "PUT",
