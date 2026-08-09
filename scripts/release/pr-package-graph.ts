@@ -18,17 +18,15 @@ export const DEPENDENCY_SECTIONS = [
   "optionalDependencies",
 ] as const;
 
-export function duplicateWorkspaceDependencies(plan: PrPackagePlan): Set<string> {
-  // build-pr-packages restores each manifest after packing, so every package
-  // derives the graph-wide duplicate set from the same workspace state.
+export function duplicateSelectedDependencies(plan: PrPackagePlan): Set<string> {
   const selected = new Set(plan.packages.map((pkg) => pkg.name));
   const counts = new Map<string, number>();
 
   for (const pkg of plan.packages) {
     const manifest = JSON.parse(readFileSync(join(pkg.dir, "package.json"), "utf8")) as Manifest;
     for (const section of DEPENDENCY_SECTIONS) {
-      for (const [name, value] of Object.entries(manifest[section] ?? {})) {
-        if (value.startsWith("workspace:") && selected.has(name)) {
+      for (const name of Object.keys(manifest[section] ?? {})) {
+        if (selected.has(name)) {
           counts.set(name, (counts.get(name) ?? 0) + 1);
         }
       }

@@ -2,10 +2,8 @@
 /** Build and pack every selected PR package on the current runner. */
 import {
   mkdirSync,
-  readFileSync,
   readdirSync,
   renameSync,
-  writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
 import {
@@ -33,7 +31,7 @@ const buildCommand = required("BUILD_COMMAND");
 const packScript = join(import.meta.dir, "pack-pr-package.ts");
 const artifactRoot = resolve(".pr-packages");
 
-// Finish every build before pack-pr-package mutates any package manifest.
+// Finish every build before packing so builds all see the original workspace.
 for (const pkg of plan.packages) {
   console.log(`::group::Build ${pkg.name}`);
   await run(
@@ -46,17 +44,7 @@ for (const pkg of plan.packages) {
 for (const pkg of plan.packages) {
   console.log(`::group::Pack ${pkg.name}`);
   const packageDir = resolve(pkg.dir);
-  const manifestPath = join(packageDir, "package.json");
-  const manifest = readFileSync(manifestPath);
-  try {
-    await run(["bun", packScript, pkg.dir]);
-  } finally {
-    // pack-pr-package rewrites workspace dependencies in place. Matrix jobs
-    // previously discarded that mutation with their checkout; restore it here
-    // so every sequential pack derives graph-wide duplicate edges from the
-    // same manifests.
-    writeFileSync(manifestPath, manifest);
-  }
+  await run(["bun", packScript, pkg.dir]);
 
   const tarballs = readdirSync(packageDir).filter((file) =>
     file.endsWith(".tgz"),
