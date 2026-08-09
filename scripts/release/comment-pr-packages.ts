@@ -39,18 +39,28 @@ const token = required("GH_TOKEN");
 const repo = required("REPO");
 const prNumber = required("PR_NUMBER");
 const plan = JSON.parse(required("PLAN")) as PrPackagePlan;
+const groups = new Map<string, typeof plan.packages>();
+for (const pkg of plan.packages) {
+  const group = pkg.group ?? "Packages";
+  groups.set(group, [...(groups.get(group) ?? []), pkg]);
+}
 
 const body = [
   MARKER,
   "",
   "Install the packages built from this commit:",
   "",
-  "| Package | Install |",
-  "| --- | --- |",
-  ...plan.packages.map(
-    ({ name, install, short }) =>
-      `| \`${name}\` | \`bun add https://${plan.install_host}/${install}/${short}\` |`,
-  ),
+  ...[...groups].flatMap(([group, packages]) => [
+    `### ${group}`,
+    "",
+    "| Package | Install |",
+    "| --- | --- |",
+    ...packages.map(
+      ({ name, install, short }) =>
+        `| \`${name}\` | \`bun add https://${plan.install_host}/${install}/${short}\` |`,
+    ),
+    "",
+  ]),
 ].join("\n");
 
 let existing: GitHubComment | undefined;

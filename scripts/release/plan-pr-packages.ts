@@ -11,6 +11,7 @@ import { fail, jsonArray, output, required, type Package, type PrPackagePlan } f
 type PackageInput = {
   dir: string;
   name: string;
+  group?: string;
   project?: string;
   install?: string;
   submodule?: boolean;
@@ -70,6 +71,7 @@ if (
       typeof p === "object" &&
       typeof p.dir === "string" &&
       typeof p.name === "string" &&
+      (p.group === undefined || (typeof p.group === "string" && p.group.trim().length > 0)) &&
       (p.submodule === undefined || typeof p.submodule === "boolean"),
   )
 ) {
@@ -97,6 +99,7 @@ const packages: Package[] = await Promise.all(
     return {
       dir: p.dir,
       name: p.name,
+      group: p.group?.trim(),
       project: p.project ?? p.name,
       install: p.install ?? p.project ?? p.name,
       submodule: p.submodule ?? false,

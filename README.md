@@ -144,15 +144,19 @@ on:
     types: [opened, synchronize, reopened, closed, labeled]
 jobs:
   pr-package:
-    uses: alchemy-run/actions/.github/workflows/pr-package.yml@main
-    with:
-      packages: |
-        [
-          { "dir": "packages/alchemy",     "name": "alchemy" },
-          { "dir": "packages/better-auth", "name": "@alchemy.run/better-auth" },
-          { "dir": "packages/pr-package",  "name": "@alchemy.run/pr-package" }
-        ]
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: alchemy-run/actions/actions/pr-package@main
+        with:
+          packages: |
+            [
+              { "dir": "packages/alchemy",     "name": "alchemy",                  "group": "Alchemy" },
+              { "dir": "packages/better-auth", "name": "@alchemy.run/better-auth", "group": "Alchemy" },
+              { "dir": "packages/pr-package",  "name": "@alchemy.run/pr-package",  "group": "Alchemy" }
+            ]
+          pr-package-token: ${{ secrets.PR_PACKAGE_TOKEN }}
+          github-app-id: ${{ secrets.ALCHEMY_VERSION_BOT_ID }}
+          github-app-private-key: ${{ secrets.ALCHEMY_VERSION_BOT_PRIVATE_KEY }}
 ```
 
 **Per-package config** (all optional except `dir` and `name`):
@@ -161,15 +165,16 @@ jobs:
 | ---------- | ---------------- | -------------------------------------------------------- |
 | `dir`      | —                | Workspace path (e.g. `packages/aws`)                    |
 | `name`     | —                | npm package name (used for the workspace-dep graph)      |
+| `group`    | `Packages`       | Heading used to group install commands in the PR comment |
 | `project`  | = `name`         | Project name in the pr-package upload URL                |
 | `install`  | = `project`      | Path used in the `bun add` URL on PR comments            |
 | `submodule` | `false`          | Resolve this package's commit from its Git submodule     |
 
-Top-level inputs include `pr-package-host` (upload target, default
-`pkg.ing`), `install-host` (CDN host for PR-comment URLs; defaults to
+Action inputs include `pr-package-host` (upload target, default `pkg.ing`),
+`install-host` (CDN host for PR-comment URLs; defaults to
 `pr-package-host`), `build-command` (default `bun run build`, run
-per-package), `runner` (the single job's runner, default `ubuntu-latest`), and
-`force-ci-label` (default `force-ci`).
+per-package), and `force-ci-label` (default `force-ci`). The caller selects the
+single job's runner with `runs-on`.
 
 All selected packages build and publish in one job on one runner. The workflow
 rewrites configured workspace dependencies to deterministic URLs for the same

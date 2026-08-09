@@ -12,29 +12,24 @@ on:
     # past PR close so existing install URLs keep resolving.
     types: [opened, synchronize, reopened, labeled]
 
-# Reusable workflows can't widen permissions — the caller must grant
-# `pull-requests: write` for the sticky install-instructions comment.
+# Actions can't widen permissions — the job must grant `pull-requests: write`
+# for the sticky install-instructions comment.
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
   pr-package:
-    uses: alchemy-run/actions/.github/workflows/pr-package.yml@main
-    with:
-      packages: |
-        [
-          {
-            "dir": "packages/alchemy",
-            "name": "alchemy"
-          },
-          {
-            "dir": "packages/better-auth",
-            "name": "@alchemy.run/better-auth"
-          },
-          {
-            "dir": "packages/pr-package",
-            "name": "@alchemy.run/pr-package"
-          }
-        ]
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: alchemy-run/actions/actions/pr-package@main
+        with:
+          packages: |
+            [
+              { "dir": "packages/alchemy",     "name": "alchemy",                  "group": "Alchemy" },
+              { "dir": "packages/better-auth", "name": "@alchemy.run/better-auth", "group": "Alchemy" },
+              { "dir": "packages/pr-package",  "name": "@alchemy.run/pr-package",  "group": "Alchemy" }
+            ]
+          pr-package-token: ${{ secrets.PR_PACKAGE_TOKEN }}
+          github-app-id: ${{ secrets.ALCHEMY_VERSION_BOT_ID }}
+          github-app-private-key: ${{ secrets.ALCHEMY_VERSION_BOT_PRIVATE_KEY }}

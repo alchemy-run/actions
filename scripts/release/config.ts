@@ -13,6 +13,7 @@ import { appendFileSync } from "node:fs";
 export type Package = {
   dir: string;
   name: string;
+  group?: string;
   project: string;
   install: string;
   submodule: boolean;
