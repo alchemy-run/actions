@@ -28,6 +28,14 @@ jobs:
 
       - uses: alchemy-run/actions/actions/setup@main
 
+      - uses: actions/cache@v5
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ github.repository_id }}-${{ github.sha }}-
+            turbo-${{ runner.os }}-${{ github.repository_id }}-
+
       - run: bun run build
 
       - id: publish

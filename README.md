@@ -155,6 +155,14 @@ jobs:
 
       - uses: alchemy-run/actions/actions/setup@main
 
+      - uses: actions/cache@v5
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ github.repository_id }}-${{ github.sha }}-
+            turbo-${{ runner.os }}-${{ github.repository_id }}-
+
       - run: bun run build
 
       - id: publish
@@ -257,7 +265,7 @@ the public action inputs are mapped to their internal environment variables:
 .github/workflows/
   release.yml           # reusable workflow (workflow_call)
 actions/
-  setup/action.yml              # Node/Bun setup + Bun/Turbo caches + install
+  setup/action.yml              # setup-node + setup-bun + cache + bun install
   pr-package/action.yml         # plan + pack + rewrite + upload
   pr-package-comment/action.yml # optional grouped install comment
 scripts/release/

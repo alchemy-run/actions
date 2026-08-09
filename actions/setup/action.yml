@@ -1,5 +1,5 @@
 name: Setup
-description: Set up Node and Bun, restore Bun and Turbo caches, and run bun install.
+description: Set up Node + Bun, restore the bun install cache, and run `bun install`.
 
 inputs:
   node-version:
@@ -22,10 +22,6 @@ inputs:
     description: Whether to run `bun install`
     required: false
     default: "true"
-  turbo-cache:
-    description: Whether to restore and save the workspace's local Turbo cache
-    required: false
-    default: "true"
 
 runs:
   using: composite
@@ -45,15 +41,6 @@ runs:
         key: bun-${{ runner.os }}-${{ hashFiles('bun.lock', 'bun.lockb') }}
         restore-keys: |
           bun-${{ runner.os }}-
-
-    - if: inputs.turbo-cache == 'true'
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-      with:
-        path: ${{ inputs.working-directory }}/.turbo
-        key: turbo-${{ runner.os }}-${{ github.repository }}-${{ github.sha }}-${{ github.run_attempt }}
-        restore-keys: |
-          turbo-${{ runner.os }}-${{ github.repository }}-${{ github.sha }}-
-          turbo-${{ runner.os }}-${{ github.repository }}-
 
     - if: inputs.install == 'true'
       shell: bash
