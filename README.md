@@ -209,9 +209,11 @@ separate `pr-package-comment` action.
 
 All selected packages pack and publish in one job on one runner. The action
 rewrites configured workspace dependencies to deterministic URLs for the same
-commit graph, uploads the complete dependency set, and only then exposes
-full/short commit, branch, and PR tags. It does not build packages, use package
-matrices, publish waves, workflow artifacts, or per-package runner overrides.
+commit graph, addresses each archive by `(package, sha256, byte size)`, and
+uploads it only when that exact content is absent. It then exposes dependency,
+full/short commit, branch, and PR tags as lightweight pointers to the backing
+archive. It does not build packages, use package matrices, publish waves,
+workflow artifacts, or per-package runner overrides.
 
 Packages use the action's workflow event commit by default. Set
 `submodule: true` on a package inside a checked-out Git submodule to use that

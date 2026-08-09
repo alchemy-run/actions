@@ -7,11 +7,14 @@ import { $ } from "bun";
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
+  lutimesSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -39,9 +42,7 @@ function rewriteDependencies(plan: PrPackagePlan, dir: string, manifestPath: str
     for (const [name, value] of Object.entries(dependencies)) {
       const dependency = selected.get(name);
       if (!dependency && publishable.has(name)) {
-        fail(
-          `${manifest.name ?? dir}: publishable dependency ${name} is missing from this run`,
-        );
+        fail(`${manifest.name ?? dir}: publishable dependency ${name} is missing from this run`);
       }
       if (!dependency) continue;
       const tag = duplicates.has(name)
@@ -56,6 +57,27 @@ function rewriteDependencies(plan: PrPackagePlan, dir: string, manifestPath: str
   if (rewritten) {
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   }
+}
+
+function normalizeArchiveTree(root: string): string[] {
+  const entries: string[] = [];
+  const visit = (relative: string) => {
+    const absolute = join(root, relative);
+    const stat = lstatSync(absolute);
+    if (stat.isSymbolicLink()) {
+      lutimesSync(absolute, 0, 0);
+    } else {
+      utimesSync(absolute, 0, 0);
+    }
+    entries.push(relative);
+    if (stat.isDirectory()) {
+      for (const child of readdirSync(absolute).sort()) {
+        visit(join(relative, child));
+      }
+    }
+  };
+  visit("package");
+  return entries;
 }
 
 const dir = process.argv[2];
@@ -91,8 +113,12 @@ try {
     copyFileSync(readme, join(extracted, "package", "README.md"));
   }
   rewriteDependencies(plan, dir, join(extracted, "package", "package.json"));
+  const entries = normalizeArchiveTree(extracted);
+  const fileList = join(extracted, "files.txt");
+  await Bun.write(fileList, `${entries.join("\n")}\n`);
   unlinkSync(tarball);
-  const repack = await $`env COPYFILE_DISABLE=1 tar -czf ${tarball} -C ${extracted} package`.nothrow();
+  const repack =
+    await $`env COPYFILE_DISABLE=1 tar --no-recursion -cf - -C ${extracted} -T ${fileList} | gzip -n > ${tarball}`.nothrow();
   if (repack.exitCode !== 0) {
     fail(`Could not repack ${tarballs[0]}`);
   }
