@@ -167,7 +167,8 @@ jobs:
 Top-level inputs include `pr-package-host` (upload target, default
 `pkg.ing`), `install-host` (CDN host for PR-comment URLs; defaults to
 `pr-package-host`), `build-command` (default `bun run build`, run
-per-package), and `force-ci-label` (default `force-ci`).
+per-package), `runner` (the single job's runner, default `ubuntu-latest`), and
+`force-ci-label` (default `force-ci`).
 
 All selected packages build and publish in one job on one runner. The workflow
 rewrites configured workspace dependencies to deterministic URLs for the same
