@@ -1,0 +1,22 @@
+name: Comment PR packages
+description: Create or update the grouped PR-package install comment.
+
+inputs:
+  plan:
+    description: Resolved plan output from the PR-package action
+    required: true
+  token:
+    description: GitHub token used to create or update the comment
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        ACTIONS_DIR: ${{ github.action_path }}/../..
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PLAN: ${{ inputs.plan }}
+      run: bun "$ACTIONS_DIR/scripts/release/comment-pr-packages.ts"

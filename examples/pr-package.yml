@@ -22,7 +22,16 @@ jobs:
   pr-package:
     runs-on: ubuntu-latest
     steps:
-      - uses: alchemy-run/actions/actions/pr-package@main
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: alchemy-run/actions/actions/setup@main
+
+      - run: bun run build
+
+      - id: publish
+        uses: alchemy-run/actions/actions/pr-package@main
         with:
           packages: |
             [
@@ -31,5 +40,16 @@ jobs:
               { "dir": "packages/pr-package",  "name": "@alchemy.run/pr-package",  "group": "Alchemy" }
             ]
           pr-package-token: ${{ secrets.PR_PACKAGE_TOKEN }}
-          github-app-id: ${{ secrets.ALCHEMY_VERSION_BOT_ID }}
-          github-app-private-key: ${{ secrets.ALCHEMY_VERSION_BOT_PRIVATE_KEY }}
+
+      - if: github.event_name == 'pull_request'
+        id: bot-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.ALCHEMY_VERSION_BOT_ID }}
+          private-key: ${{ secrets.ALCHEMY_VERSION_BOT_PRIVATE_KEY }}
+
+      - if: github.event_name == 'pull_request'
+        uses: alchemy-run/actions/actions/pr-package-comment@main
+        with:
+          plan: ${{ steps.publish.outputs.plan }}
+          token: ${{ steps.bot-token.outputs.token }}
