@@ -4,6 +4,7 @@
  * every package in the plan.
  */
 import { fail, required, type PrPackagePlan } from "./config.ts";
+import { renderPackageTables } from "./render-pr-packages.ts";
 
 type GitHubComment = {
   id: number;
@@ -39,28 +40,13 @@ const token = required("GH_TOKEN");
 const repo = required("REPO");
 const prNumber = required("PR_NUMBER");
 const plan = JSON.parse(required("PLAN")) as PrPackagePlan;
-const groups = new Map<string, typeof plan.packages>();
-for (const pkg of plan.packages) {
-  const group = pkg.group ?? "Packages";
-  groups.set(group, [...(groups.get(group) ?? []), pkg]);
-}
 
 const body = [
   MARKER,
   "",
   "Install the packages built from this commit:",
   "",
-  ...[...groups].flatMap(([group, packages]) => [
-    `### ${group}`,
-    "",
-    "| Package | Install |",
-    "| --- | --- |",
-    ...packages.map(
-      ({ name, install, short }) =>
-        `| \`${name}\` | \`bun add https://${plan.install_host}/${install}/${short}\` |`,
-    ),
-    "",
-  ]),
+  renderPackageTables(plan),
 ].join("\n");
 
 let existing: GitHubComment | undefined;

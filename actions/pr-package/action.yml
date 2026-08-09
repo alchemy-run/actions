@@ -74,3 +74,11 @@ runs:
         TOKEN: ${{ inputs.pr-package-token }}
         TTL: ${{ github.event_name == 'pull_request' && inputs.pr-ttl || '' }}
       run: bun "$ACTIONS_DIR/scripts/release/publish-pr-package-graph.ts"
+
+    - name: Add package URLs to run summary
+      if: fromJson(steps.plan.outputs.plan).packages[0] != null
+      shell: bash
+      env:
+        ACTIONS_DIR: ${{ github.action_path }}/../..
+        PLAN: ${{ steps.plan.outputs.plan }}
+      run: bun "$ACTIONS_DIR/scripts/release/summarize-pr-packages.ts"
