@@ -200,7 +200,6 @@ jobs:
 | `group`    | `Packages`       | Heading used to group install commands in the PR comment |
 | `project`  | = `name`         | Project name in the pr-package upload URL                |
 | `install`  | = `project`      | Path used in generated package URLs                       |
-| `readme`   | —                | Repository-relative README to inject into the tarball     |
 | `submodule` | `false`          | Resolve this package's commit from its Git submodule     |
 
 Action inputs include `pr-package-host` (upload target, default `pkg.ing`),
@@ -211,7 +210,7 @@ separate `pr-package-comment` action.
 
 All selected packages pack and publish in one job on one runner. The action
 rewrites configured workspace dependencies to deterministic full-commit URLs,
-addresses each archive by `(package, sha256, byte size)`, and uploads it only
+addresses each archive by `(package, sha256)`, and uploads it only
 when that exact content is absent. It points every package's full commit first,
 then exposes short commit, branch, and PR aliases to the backing archive. The
 action also adds grouped install tables to the GitHub Actions run summary. It

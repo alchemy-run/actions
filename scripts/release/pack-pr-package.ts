@@ -5,8 +5,6 @@
  */
 import { $ } from "bun";
 import {
-  copyFileSync,
-  existsSync,
   lstatSync,
   lutimesSync,
   mkdtempSync,
@@ -75,8 +73,9 @@ if (!dir) fail("Usage: pack-pr-package.ts <package-dir>");
 
 const plan = JSON.parse(required("PLAN")) as PrPackagePlan;
 const cwd = resolve(process.cwd(), dir);
-const pkg = plan.packages.find((entry) => entry.dir === dir);
-if (!pkg) fail(`Package ${dir} is missing from the plan`);
+if (!plan.packages.some((entry) => entry.dir === dir)) {
+  fail(`Package ${dir} is missing from the plan`);
+}
 
 for (const file of readdirSync(cwd).filter((f) => f.endsWith(".tgz"))) {
   unlinkSync(resolve(cwd, file));
@@ -100,11 +99,6 @@ try {
     fail(`Could not extract ${tarballs[0]}`);
   }
 
-  if (pkg.readme) {
-    const readme = resolve(pkg.readme);
-    if (!existsSync(readme)) fail(`README ${pkg.readme} does not exist`);
-    copyFileSync(readme, join(extracted, "package", "README.md"));
-  }
   rewriteDependencies(plan, dir, join(extracted, "package", "package.json"));
   const entries = normalizeArchiveTree(extracted);
   const fileList = join(extracted, "files.txt");

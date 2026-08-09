@@ -15,7 +15,6 @@ type PackageInput = {
   group?: string;
   project?: string;
   install?: string;
-  readme?: string;
   submodule?: boolean;
 };
 
@@ -74,7 +73,6 @@ if (
       typeof p.dir === "string" &&
       typeof p.name === "string" &&
       (p.group === undefined || (typeof p.group === "string" && p.group.trim().length > 0)) &&
-      (p.readme === undefined || (typeof p.readme === "string" && p.readme.trim().length > 0)) &&
       (p.submodule === undefined || typeof p.submodule === "boolean"),
   )
 ) {
@@ -111,7 +109,6 @@ const packages: Package[] = await Promise.all(
       group: p.group?.trim(),
       project: p.project ?? p.name,
       install: p.install ?? p.project ?? p.name,
-      readme: p.readme?.trim(),
       submodule: p.submodule ?? false,
       artifact: `pr-package-${encoded}`,
       commit,
