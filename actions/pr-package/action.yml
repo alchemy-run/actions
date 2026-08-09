@@ -1,0 +1,84 @@
+name: Publish PR packages
+description: Pack, rewrite, and upload related PR packages.
+
+inputs:
+  packages:
+    description: >-
+      JSON array of package config. Each entry requires dir and name and may
+      include group, project, install, readme, and submodule.
+    required: true
+  pr-package-token:
+    description: Bearer token used to upload packages
+    required: true
+  pr-package-host:
+    description: Host the tarballs upload to
+    required: false
+    default: pkg.ing
+  install-host:
+    description: Host used by install URLs; defaults to pr-package-host
+    required: false
+    default: ""
+  force-ci-label:
+    description: PR label that forces every package to publish
+    required: false
+    default: force-ci
+  rebuild-all-paths:
+    description: Newline-separated paths that cause every package to publish
+    required: false
+    default: ""
+  pr-ttl:
+    description: Package lifetime for pull request publications
+    required: false
+    default: 1 week
+
+outputs:
+  plan:
+    description: Resolved package publication plan
+    value: ${{ steps.plan.outputs.plan }}
+
+runs:
+  using: composite
+  steps:
+    - name: Plan PR packages
+      id: plan
+      shell: bash
+      env:
+        ACTIONS_DIR: ${{ github.action_path }}/../..
+        EVENT: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+        SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        FORCE_LABEL_PRESENT: ${{ contains(github.event.pull_request.labels.*.name, inputs.force-ci-label) }}
+        PACKAGES_JSON: ${{ inputs.packages }}
+        PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
+        INSTALL_HOST: ${{ inputs.install-host }}
+        ALCHEMY_PR_REBUILD_ALL_GLOBS: ${{ inputs.rebuild-all-paths }}
+      run: bun "$ACTIONS_DIR/scripts/release/plan-pr-packages.ts"
+
+    - name: Pack and rewrite packages
+      if: fromJson(steps.plan.outputs.plan).packages[0] != null
+      shell: bash
+      env:
+        ACTIONS_DIR: ${{ github.action_path }}/../..
+        PLAN: ${{ steps.plan.outputs.plan }}
+      run: bun "$ACTIONS_DIR/scripts/release/pack-pr-packages.ts"
+
+    - name: Publish PR packages
+      if: fromJson(steps.plan.outputs.plan).packages[0] != null
+      shell: bash
+      env:
+        ACTIONS_DIR: ${{ github.action_path }}/../..
+        PLAN: ${{ steps.plan.outputs.plan }}
+        PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
+        TOKEN: ${{ inputs.pr-package-token }}
+        TTL: ${{ github.event_name == 'pull_request' && inputs.pr-ttl || '' }}
+      run: bun "$ACTIONS_DIR/scripts/release/publish-pr-packages.ts"
+
+    - name: Add package URLs to run summary
+      if: fromJson(steps.plan.outputs.plan).packages[0] != null
+      shell: bash
+      env:
+        ACTIONS_DIR: ${{ github.action_path }}/../..
+        PLAN: ${{ steps.plan.outputs.plan }}
+      run: bun "$ACTIONS_DIR/scripts/release/summarize-pr-packages.ts"

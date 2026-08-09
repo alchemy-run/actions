@@ -3,11 +3,9 @@
  * Create or update the sticky pull request comment with install commands for
  * every package in the plan.
  */
-import {
-  fail,
-  required,
-  type PrPackagePlan,
-} from "./config.ts";
+import { fail, required } from "./config.ts";
+import type { PrPackagePlan } from "./pr-package-config.ts";
+import { renderPackageTables } from "./render-pr-packages.ts";
 
 type GitHubComment = {
   id: number;
@@ -18,11 +16,7 @@ type GitHubComment = {
 const MARKER = "<!-- pr-package-comment -->";
 const BOT_LOGIN = "alchemy-version-bot[bot]";
 
-async function requestGitHub<T>(
-  token: string,
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
+async function requestGitHub<T>(token: string, path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`https://api.github.com${path}`, {
     ...init,
     headers: {
@@ -53,13 +47,7 @@ const body = [
   "",
   "Install the packages built from this commit:",
   "",
-  ...plan.packages.flatMap(({ name, install }) => [
-    `**${name}**`,
-    "```sh",
-    `bun add ${name}@https://${plan.install_host}/${install}/${plan.short}`,
-    "```",
-    "",
-  ]),
+  renderPackageTables(plan),
 ].join("\n");
 
 let existing: GitHubComment | undefined;
@@ -68,9 +56,7 @@ for (let page = 1; !existing; page++) {
     token,
     `/repos/${repo}/issues/${prNumber}/comments?per_page=100&page=${page}`,
   );
-  existing = comments.find(
-    (c) => c.user?.login === BOT_LOGIN && c.body?.startsWith(MARKER),
-  );
+  existing = comments.find((c) => c.user?.login === BOT_LOGIN && c.body?.startsWith(MARKER));
   if (comments.length < 100) break;
 }
 
@@ -85,6 +71,4 @@ await requestGitHub(
     headers: { "Content-Type": "application/json" },
   },
 );
-console.log(
-  existing ? "Updated PR-package comment" : "Created PR-package comment",
-);
+console.log(existing ? "Updated PR-package comment" : "Created PR-package comment");

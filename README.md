@@ -117,18 +117,21 @@ exact commit GitHub resolved for the workflow reference. This keeps branch,
 tag, and SHA callers self-contained. The optional `actions-ref` input exists
 only for testing a different scripts revision explicitly.
 
-### `pr-package.yml`
+## PR-package actions
+
+### `actions/pr-package`
 
 Publishes per-package tarballs to a pr-package service (default
-[`pkg.ing`](https://pkg.ing)) on every push-to-main and PR sync, and
-leaves a sticky PR comment with install URLs pinned to the head commit.
+[`pkg.ing`](https://pkg.ing)) on every push-to-main and PR sync. A separate
+optional action leaves a sticky PR comment with URLs pinned to the head commit.
 
-**Partial builds.** Only packages whose own dir OR a transitive
-workspace dep's dir changed are rebuilt — the dep graph is derived from
-each `package.json`'s `workspace:*` deps, so a touch to `core/` rebuilds
-every leaf that depends on it. A `force-ci` PR label overrides and
-rebuilds everything; touching `bun.lock`, root `package.json`, or this
-workflow's yaml also rebuilds everything.
+**Partial publication.** Only packages whose own dir or a transitive workspace
+dependency's dir changed are repacked — the graph is derived from each
+`package.json`'s `workspace:*` dependencies, so a touch to `core/` republishes
+every leaf that depends on it. A `force-ci` PR label overrides and republishes
+everything; touching `bun.lock`, root `package.json`, or the consumer workflow
+also republishes everything. The caller may build a wider set before invoking
+the action.
 
 **PR close is a no-op.** Tags persist past PR close so install URLs
 keep resolving long-term — the pkg.ing bucket's TTL handles orphan
@@ -141,18 +144,51 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, closed, labeled]
+    # Tags remain valid after a PR closes, so no `closed` event is needed.
+    types: [opened, synchronize, reopened, labeled]
 jobs:
   pr-package:
-    uses: alchemy-run/actions/.github/workflows/pr-package.yml@main
-    with:
-      packages: |
-        [
-          { "dir": "packages/alchemy",     "name": "alchemy" },
-          { "dir": "packages/better-auth", "name": "@alchemy.run/better-auth" },
-          { "dir": "packages/pr-package",  "name": "@alchemy.run/pr-package" }
-        ]
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: alchemy-run/actions/actions/setup@main
+
+      - uses: actions/cache@v5
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ github.repository_id }}-${{ github.sha }}-
+            turbo-${{ runner.os }}-${{ github.repository_id }}-
+
+      - run: bun run build
+
+      - id: publish
+        uses: alchemy-run/actions/actions/pr-package@main
+        with:
+          packages: |
+            [
+              { "dir": "packages/alchemy",     "name": "alchemy",                  "group": "Alchemy" },
+              { "dir": "packages/better-auth", "name": "@alchemy.run/better-auth", "group": "Alchemy" },
+              { "dir": "packages/pr-package",  "name": "@alchemy.run/pr-package",  "group": "Alchemy" }
+            ]
+          pr-package-token: ${{ secrets.PR_PACKAGE_TOKEN }}
+
+      - if: github.event_name == 'pull_request'
+        id: bot-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.ALCHEMY_VERSION_BOT_ID }}
+          private-key: ${{ secrets.ALCHEMY_VERSION_BOT_PRIVATE_KEY }}
+
+      - if: github.event_name == 'pull_request'
+        uses: alchemy-run/actions/actions/pr-package-comment@main
+        with:
+          plan: ${{ steps.publish.outputs.plan }}
+          token: ${{ steps.bot-token.outputs.token }}
 ```
 
 **Per-package config** (all optional except `dir` and `name`):
@@ -160,22 +196,37 @@ jobs:
 | Field      | Default          | Meaning                                                  |
 | ---------- | ---------------- | -------------------------------------------------------- |
 | `dir`      | —                | Workspace path (e.g. `packages/aws`)                    |
-| `name`     | —                | npm package name (used for the workspace-dep graph)      |
+| `name`     | —                | npm package name used to match workspace dependencies     |
+| `group`    | `Packages`       | Heading used to group install commands in the PR comment |
 | `project`  | = `name`         | Project name in the pr-package upload URL                |
-| `install`  | = `project`      | Path used in the `bun add` URL on PR comments            |
-| `runner`   | `ubuntu-latest`  | Override the GitHub runner (e.g. for huge builds)        |
+| `install`  | = `project`      | Path used in generated package URLs                       |
+| `readme`   | —                | Repository-relative README to inject into the tarball     |
+| `submodule` | `false`          | Resolve this package's commit from its Git submodule     |
 
-Top-level inputs include `pr-package-host` (upload target, default
-`pkg.ing`), `install-host` (CDN host for PR-comment URLs; defaults to
-`pr-package-host`), `build-command` (default `bun run build`, run
-per-package), and `force-ci-label` (default `force-ci`).
+Action inputs include `pr-package-host` (upload target, default `pkg.ing`),
+`install-host` (CDN host for package URLs; defaults to `pr-package-host`), and
+`force-ci-label` (default `force-ci`). The caller owns checkout, tool setup,
+dependency installation, building, runner selection, and whether to invoke the
+separate `pr-package-comment` action.
 
-PR-package builds and packs every selected package in one parallel pass,
-with configured workspace dependencies rewritten to deterministic URLs for
-the same commit graph. It uploads the complete dependency set first, then
-exposes full/short commit, branch, and PR tags. Graph depth is therefore not
-limited by a fixed number of workflow jobs, and install instructions are
-posted only after the complete graph is available.
+All selected packages pack and publish in one job on one runner. The action
+rewrites configured workspace dependencies to deterministic full-commit URLs,
+addresses each archive by `(package, sha256, byte size)`, and uploads it only
+when that exact content is absent. It points every package's full commit first,
+then exposes short commit, branch, and PR aliases to the backing archive. The
+action also adds grouped install tables to the GitHub Actions run summary. It
+does not build packages, use package matrices, publish waves, workflow artifacts,
+or per-package runner overrides.
+
+Packages use the action's workflow event commit by default. Set
+`submodule: true` on a package inside a checked-out Git submodule to use that
+submodule's checked-out commit for dependency URLs and install commands.
+
+### `actions/pr-package-comment`
+
+Optionally creates or updates the grouped install table from the publish
+action's `plan` output. The caller supplies the token and decides when the
+comment should run.
 
 ## Required secrets (inherited from the caller)
 
@@ -202,9 +253,9 @@ is skipped with a workflow warning that includes the manual command.
 
 ## Scripts
 
-All scripts live under `scripts/release/` and are invoked from the reusable
-workflows. They run in the **consumer** repo's working directory and read
-config from env vars set by the workflow:
+All scripts live under `scripts/release/` and are invoked from the shared
+workflows and actions. They run in the **consumer** repo's working directory;
+the public action inputs are mapped to their internal environment variables:
 
 | Env var                         | Meaning                                                    |
 | ------------------------------- | ---------------------------------------------------------- |
@@ -218,12 +269,14 @@ config from env vars set by the workflow:
 ```
 .github/workflows/
   release.yml           # reusable workflow (workflow_call)
-  pr-package.yml        # reusable workflow (workflow_call)
 actions/
-  setup/action.yml      # composite: setup-node + setup-bun + cache + bun install
+  setup/action.yml              # setup-node + setup-bun + cache + bun install
+  pr-package/action.yml         # plan + pack + rewrite + upload
+  pr-package-comment/action.yml # optional grouped install comment
 scripts/release/
   bump.ts
   publish-package.ts
+  pack-pr-packages.ts
   release-notes.ts
   github-release.ts
   discord-notify.ts

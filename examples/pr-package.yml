@@ -12,29 +12,52 @@ on:
     # past PR close so existing install URLs keep resolving.
     types: [opened, synchronize, reopened, labeled]
 
-# Reusable workflows can't widen permissions — the caller must grant
-# `pull-requests: write` for the sticky install-instructions comment.
+# Actions can't widen permissions — the job must grant `pull-requests: write`
+# for the sticky install-instructions comment.
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
   pr-package:
-    uses: alchemy-run/actions/.github/workflows/pr-package.yml@main
-    with:
-      packages: |
-        [
-          {
-            "dir": "packages/alchemy",
-            "name": "alchemy"
-          },
-          {
-            "dir": "packages/better-auth",
-            "name": "@alchemy.run/better-auth"
-          },
-          {
-            "dir": "packages/pr-package",
-            "name": "@alchemy.run/pr-package"
-          }
-        ]
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: alchemy-run/actions/actions/setup@main
+
+      - uses: actions/cache@v5
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.repository_id }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ github.repository_id }}-${{ github.sha }}-
+            turbo-${{ runner.os }}-${{ github.repository_id }}-
+
+      - run: bun run build
+
+      - id: publish
+        uses: alchemy-run/actions/actions/pr-package@main
+        with:
+          packages: |
+            [
+              { "dir": "packages/alchemy",     "name": "alchemy",                  "group": "Alchemy" },
+              { "dir": "packages/better-auth", "name": "@alchemy.run/better-auth", "group": "Alchemy" },
+              { "dir": "packages/pr-package",  "name": "@alchemy.run/pr-package",  "group": "Alchemy" }
+            ]
+          pr-package-token: ${{ secrets.PR_PACKAGE_TOKEN }}
+
+      - if: github.event_name == 'pull_request'
+        id: bot-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.ALCHEMY_VERSION_BOT_ID }}
+          private-key: ${{ secrets.ALCHEMY_VERSION_BOT_PRIVATE_KEY }}
+
+      - if: github.event_name == 'pull_request'
+        uses: alchemy-run/actions/actions/pr-package-comment@main
+        with:
+          plan: ${{ steps.publish.outputs.plan }}
+          token: ${{ steps.bot-token.outputs.token }}
