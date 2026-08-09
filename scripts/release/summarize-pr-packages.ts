@@ -2,7 +2,7 @@
 import { appendFileSync } from "node:fs";
 import { required } from "./config.ts";
 import type { PrPackagePlan } from "./pr-package-config.ts";
-import { renderPackageTables } from "./render-pr-packages.ts";
+import { renderPackageGroups } from "./render-pr-packages.ts";
 
 const plan = JSON.parse(required("PLAN")) as PrPackagePlan;
 const summary = [
@@ -10,7 +10,7 @@ const summary = [
   "",
   "Install the packages built from this commit:",
   "",
-  renderPackageTables(plan),
+  renderPackageGroups(plan),
 ].join("\n");
 
 appendFileSync(required("GITHUB_STEP_SUMMARY"), `${summary}\n`);

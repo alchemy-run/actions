@@ -5,7 +5,7 @@
  */
 import { fail, required } from "./config.ts";
 import type { PrPackagePlan } from "./pr-package-config.ts";
-import { renderPackageTables } from "./render-pr-packages.ts";
+import { renderPackageGroups } from "./render-pr-packages.ts";
 
 type GitHubComment = {
   id: number;
@@ -47,7 +47,7 @@ const body = [
   "",
   "Install the packages built from this commit:",
   "",
-  renderPackageTables(plan),
+  renderPackageGroups(plan),
 ].join("\n");
 
 let existing: GitHubComment | undefined;
