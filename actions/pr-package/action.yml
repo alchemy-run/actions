@@ -1,5 +1,5 @@
 name: Publish PR packages
-description: Pack, rewrite, and upload a complete package graph.
+description: Pack, rewrite, and upload related PR packages.
 
 inputs:
   packages:
@@ -39,7 +39,7 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Plan package graph
+    - name: Plan PR packages
       id: plan
       shell: bash
       env:
@@ -64,7 +64,7 @@ runs:
         PLAN: ${{ steps.plan.outputs.plan }}
       run: bun "$ACTIONS_DIR/scripts/release/pack-pr-packages.ts"
 
-    - name: Publish complete package graph
+    - name: Publish PR packages
       if: fromJson(steps.plan.outputs.plan).packages[0] != null
       shell: bash
       env:
@@ -73,7 +73,7 @@ runs:
         PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
         TOKEN: ${{ inputs.pr-package-token }}
         TTL: ${{ github.event_name == 'pull_request' && inputs.pr-ttl || '' }}
-      run: bun "$ACTIONS_DIR/scripts/release/publish-pr-package-graph.ts"
+      run: bun "$ACTIONS_DIR/scripts/release/publish-pr-packages.ts"
 
     - name: Add package URLs to run summary
       if: fromJson(steps.plan.outputs.plan).packages[0] != null

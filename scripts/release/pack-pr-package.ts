@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Pack with Bun, then rewrite selected dependencies in the resulting manifest
- * to same-commit graph URLs and repack the verified tarball.
+ * to same-commit PR-package URLs and repack the verified tarball.
  */
 import { $ } from "bun";
 import {
@@ -20,20 +20,12 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fail, required, type Package, type PrPackagePlan } from "./config.ts";
-import {
-  DEPENDENCY_SECTIONS,
-  duplicateSelectedDependencies,
-  graphEdgeTag,
-  graphUrl,
-  type Manifest,
-} from "./pr-package-graph.ts";
+import { DEPENDENCY_SECTIONS, packageUrl, type Manifest } from "./pr-package-manifest.ts";
 
 function rewriteDependencies(plan: PrPackagePlan, dir: string, manifestPath: string): void {
   const selected = new Map<string, Package>(plan.packages.map((p) => [p.name, p]));
   const publishable = new Set(plan.publishable_names);
-  const duplicates = duplicateSelectedDependencies(plan);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest;
-  const parentName = manifest.name ?? plan.packages.find((pkg) => pkg.dir === dir)?.name ?? dir;
   let rewritten = false;
 
   for (const section of DEPENDENCY_SECTIONS) {
@@ -45,10 +37,7 @@ function rewriteDependencies(plan: PrPackagePlan, dir: string, manifestPath: str
         fail(`${manifest.name ?? dir}: publishable dependency ${name} is missing from this run`);
       }
       if (!dependency) continue;
-      const tag = duplicates.has(name)
-        ? graphEdgeTag(dependency.dependency_tag, parentName)
-        : dependency.dependency_tag;
-      const url = graphUrl(plan, dependency.install, tag);
+      const url = packageUrl(plan, dependency.install, dependency.commit);
       dependencies[name] = url;
       console.log(`  ${manifest.name ?? dir}: ${section}.${name}: ${value} → ${url}`);
       rewritten = true;

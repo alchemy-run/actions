@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Package } from "./config.ts";
-import { ensureTarball, pointTags, tarball } from "./publish-pr-package-graph.ts";
+import {
+  ensureTarball,
+  pointTags,
+  publishPrPackages,
+  tarball,
+} from "./publish-pr-packages.ts";
 
 const originalFetch = globalThis.fetch;
 const temporaryDirectories: string[] = [];
@@ -14,6 +19,51 @@ afterEach(() => {
 });
 
 describe("content-addressed PR package publishing", () => {
+  test("points commit dependencies before public aliases", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pr-package-publish-test-"));
+    temporaryDirectories.push(dir);
+    const artifact = join(dir, "artifact");
+    mkdirSync(artifact);
+    await Bun.write(join(artifact, "package.tgz"), "stable tarball bytes");
+    const commit = "a".repeat(40);
+    const pkg: Package = {
+      dir: "packages/example",
+      name: "@scope/example",
+      project: "@scope/example",
+      install: "@scope/example",
+      submodule: false,
+      artifact: "artifact",
+      commit,
+      short: "aaaaaaa",
+      tags: ["aaaaaaa", commit, "feature", "pr-1"],
+    };
+
+    const pointed: string[][] = [];
+    globalThis.fetch = ((input, init) => {
+      const request = new Request(input, init);
+      if (request.method === "HEAD") {
+        return Promise.resolve(new Response(null, { status: 404 }));
+      }
+      if (request.url.endsWith("/tags")) {
+        pointed.push(JSON.parse(request.headers.get("x-tags")!) as string[]);
+      }
+      return Promise.resolve(Response.json({ ok: true }));
+    }) as typeof fetch;
+
+    await publishPrPackages({
+      plan: {
+        packages: [pkg],
+        publishable_names: [pkg.name],
+        install_host: "pkg.example.com",
+      },
+      host: "pkg.example.com",
+      token: "secret",
+      artifactRoot: dir,
+    });
+
+    expect(pointed).toEqual([[commit], ["aaaaaaa", "feature", "pr-1"]]);
+  });
+
   test("uploads bytes once and keeps moving tag pointers", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pr-package-publish-test-"));
     temporaryDirectories.push(dir);
@@ -31,7 +81,6 @@ describe("content-addressed PR package publishing", () => {
       commit: "a".repeat(40),
       short: "aaaaaaa",
       tags: ["aaaaaaa"],
-      dependency_tag: `graph-${"a".repeat(40)}`,
     };
 
     let exists = false;

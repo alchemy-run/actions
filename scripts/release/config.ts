@@ -22,7 +22,6 @@ export type Package = {
   commit: string;
   short: string;
   tags: string[];
-  dependency_tag: string;
 };
 
 export type PrPackagePlan = {

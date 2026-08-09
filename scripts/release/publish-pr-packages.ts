@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 /**
- * Publish dependency tags before public tags so failures never expose partial graphs.
+ * Publish commit pointers before public aliases so dependencies resolve before
+ * a branch or PR URL exposes the package set.
  * Tarballs are content-addressed, so unchanged packages only move tag pointers.
  */
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fail, required, type Package, type PrPackagePlan } from "./config.ts";
-import { DEPENDENCY_SECTIONS, graphEdgeTag, graphUrl, type Manifest } from "./pr-package-graph.ts";
 
 function findTarball(artifactRoot: string, pkg: Package): string {
   const artifactDir = join(artifactRoot, pkg.artifact);
@@ -19,18 +19,6 @@ function findTarball(artifactRoot: string, pkg: Package): string {
     fail(`Expected one tarball for ${pkg.project}, found ${tarballs.length}`);
   }
   return tarballs[0]!;
-}
-
-function packedManifest(tarball: string): Manifest {
-  const result = Bun.spawnSync(["tar", "-xOf", tarball, "package/package.json"], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (result.exitCode !== 0) {
-    process.stderr.write(result.stderr);
-    fail(`Failed to read package/package.json from ${tarball}`);
-  }
-  return JSON.parse(result.stdout.toString()) as Manifest;
 }
 
 export type Tarball = {
@@ -128,7 +116,7 @@ export async function pointTags(
   }
 }
 
-export async function publishPrPackageGraph(options: {
+export async function publishPrPackages(options: {
   plan: PrPackagePlan;
   host: string;
   token: string;
@@ -139,49 +127,36 @@ export async function publishPrPackageGraph(options: {
     pkg,
     tarball: tarball(findTarball(options.artifactRoot, pkg)),
   }));
-  const byName = new Map(entries.map((entry) => [entry.pkg.name, entry]));
-  const dependencyTags = new Map(
-    entries.map(({ pkg }) => [pkg.name, new Set([pkg.dependency_tag])]),
-  );
-
-  for (const { pkg, tarball } of entries) {
-    const manifest = packedManifest(tarball.path);
-    for (const section of DEPENDENCY_SECTIONS) {
-      for (const [name, value] of Object.entries(manifest[section] ?? {})) {
-        const dependency = byName.get(name)?.pkg;
-        if (!dependency) continue;
-        const tag = graphEdgeTag(dependency.dependency_tag, manifest.name ?? pkg.name);
-        if (value === graphUrl(options.plan, dependency.install, tag)) {
-          dependencyTags.get(name)!.add(tag);
-        }
-      }
-    }
-  }
 
   console.log("Ensuring content-addressed tarballs exist");
   await Promise.all(
     entries.map(({ pkg, tarball }) => ensureTarball(options.host, options.token, pkg, tarball)),
   );
 
-  console.log("Pointing same-commit dependency graph");
+  console.log("Pointing dependency commits");
   await Promise.all(
     entries.map(({ pkg, tarball }) =>
-      pointTags(options.host, options.token, options.ttl, pkg, tarball, [
-        ...dependencyTags.get(pkg.name)!,
-      ]),
+      pointTags(options.host, options.token, options.ttl, pkg, tarball, [pkg.commit]),
     ),
   );
 
-  console.log("Dependency graph complete; exposing public tags");
+  console.log("Dependency commits complete; exposing public aliases");
   await Promise.all(
     entries.map(({ pkg, tarball }) =>
-      pointTags(options.host, options.token, options.ttl, pkg, tarball, pkg.tags),
+      pointTags(
+        options.host,
+        options.token,
+        options.ttl,
+        pkg,
+        tarball,
+        pkg.tags.filter((tag) => tag !== pkg.commit),
+      ),
     ),
   );
 }
 
 if (import.meta.main) {
-  await publishPrPackageGraph({
+  await publishPrPackages({
     plan: JSON.parse(required("PLAN")) as PrPackagePlan,
     host: required("PR_PACKAGE_HOST"),
     token: required("TOKEN"),

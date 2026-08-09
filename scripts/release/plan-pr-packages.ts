@@ -79,6 +79,12 @@ if (
 ) {
   fail("PACKAGES_JSON packages must have dir and name");
 }
+const duplicateNames = configured
+  .map((pkg) => pkg.name)
+  .filter((name, index, names) => names.indexOf(name) !== index);
+if (duplicateNames.length > 0) {
+  fail(`PACKAGES_JSON package names must be unique: ${[...new Set(duplicateNames)].join(", ")}`);
+}
 
 const prTag = event === "pull_request" ? `pr-${required("PR_NUMBER")}` : undefined;
 const packages: Package[] = await Promise.all(
@@ -110,7 +116,6 @@ const packages: Package[] = await Promise.all(
       commit,
       short,
       tags: [short, commit, branch, ...(prTag ? [prTag] : [])],
-      dependency_tag: `graph-${commit}`,
     };
   }),
 );
