@@ -257,7 +257,7 @@ the public action inputs are mapped to their internal environment variables:
 .github/workflows/
   release.yml           # reusable workflow (workflow_call)
 actions/
-  setup/action.yml              # setup-node + setup-bun + cache + bun install
+  setup/action.yml              # Node/Bun setup + Bun/Turbo caches + install
   pr-package/action.yml         # plan + pack + rewrite + upload
   pr-package-comment/action.yml # optional grouped install comment
 scripts/release/
