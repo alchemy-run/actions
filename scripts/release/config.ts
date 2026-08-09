@@ -15,15 +15,17 @@ export type Package = {
   name: string;
   project: string;
   install: string;
+  submodule: boolean;
   artifact: string;
+  commit: string;
+  short: string;
+  tags: string[];
+  dependency_tag: string;
 };
 
 export type PrPackagePlan = {
   packages: Package[];
   publishable_names: string[];
-  tags: string[];
-  dependency_tag: string;
-  short: string;
   install_host: string;
 };
 
@@ -67,17 +69,11 @@ function parseJsonArray(name: string, value: string): string[] {
 }
 
 export function publishableDirs(): string[] {
-  return parseJsonArray(
-    "ALCHEMY_PUBLISHABLE_DIRS",
-    required("ALCHEMY_PUBLISHABLE_DIRS"),
-  );
+  return parseJsonArray("ALCHEMY_PUBLISHABLE_DIRS", required("ALCHEMY_PUBLISHABLE_DIRS"));
 }
 
 export function publishableNames(): string[] {
-  return parseJsonArray(
-    "ALCHEMY_PUBLISHABLE_NAMES",
-    required("ALCHEMY_PUBLISHABLE_NAMES"),
-  );
+  return parseJsonArray("ALCHEMY_PUBLISHABLE_NAMES", required("ALCHEMY_PUBLISHABLE_NAMES"));
 }
 
 export function currentVersion(): string {

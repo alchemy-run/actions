@@ -4,19 +4,9 @@
  * packing one verified tarball.
  */
 import { $ } from "bun";
-import {
-  readFileSync,
-  readdirSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import {
-  fail,
-  required,
-  type Package,
-  type PrPackagePlan,
-} from "./config.ts";
+import { fail, required, type Package, type PrPackagePlan } from "./config.ts";
 import {
   DEPENDENCY_SECTIONS,
   duplicateWorkspaceDependencies,
@@ -25,21 +15,12 @@ import {
   type Manifest,
 } from "./pr-package-graph.ts";
 
-function rewriteDependencies(
-  plan: PrPackagePlan,
-  dir: string,
-  manifestPath: string,
-): void {
-  const selected = new Map<string, Package>(
-    plan.packages.map((p) => [p.name, p]),
-  );
+function rewriteDependencies(plan: PrPackagePlan, dir: string, manifestPath: string): void {
+  const selected = new Map<string, Package>(plan.packages.map((p) => [p.name, p]));
   const publishable = new Set(plan.publishable_names);
   const duplicates = duplicateWorkspaceDependencies(plan);
-  const manifest = JSON.parse(
-    readFileSync(manifestPath, "utf-8"),
-  ) as Manifest;
-  const parentName =
-    manifest.name ?? plan.packages.find((pkg) => pkg.dir === dir)?.name ?? dir;
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest;
+  const parentName = manifest.name ?? plan.packages.find((pkg) => pkg.dir === dir)?.name ?? dir;
   let rewritten = false;
 
   for (const section of DEPENDENCY_SECTIONS) {
@@ -55,13 +36,11 @@ function rewriteDependencies(
       }
       if (!dependency) continue;
       const tag = duplicates.has(name)
-        ? graphEdgeTag(plan.dependency_tag, parentName)
-        : plan.dependency_tag;
+        ? graphEdgeTag(dependency.dependency_tag, parentName)
+        : dependency.dependency_tag;
       const url = graphUrl(plan, dependency.install, tag);
       dependencies[name] = url;
-      console.log(
-        `  ${manifest.name ?? dir}: ${section}.${name}: ${value} → ${url}`,
-      );
+      console.log(`  ${manifest.name ?? dir}: ${section}.${name}: ${value} → ${url}`);
       rewritten = true;
     }
   }

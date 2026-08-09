@@ -18,18 +18,14 @@ export const DEPENDENCY_SECTIONS = [
   "optionalDependencies",
 ] as const;
 
-export function duplicateWorkspaceDependencies(
-  plan: PrPackagePlan,
-): Set<string> {
-  // Every pack matrix job sees the same plan and clean checkout, so each can
-  // derive the graph-wide duplicate set without cross-job state.
+export function duplicateWorkspaceDependencies(plan: PrPackagePlan): Set<string> {
+  // build-pr-packages restores each manifest after packing, so every package
+  // derives the graph-wide duplicate set from the same workspace state.
   const selected = new Set(plan.packages.map((pkg) => pkg.name));
   const counts = new Map<string, number>();
 
   for (const pkg of plan.packages) {
-    const manifest = JSON.parse(
-      readFileSync(join(pkg.dir, "package.json"), "utf8"),
-    ) as Manifest;
+    const manifest = JSON.parse(readFileSync(join(pkg.dir, "package.json"), "utf8")) as Manifest;
     for (const section of DEPENDENCY_SECTIONS) {
       for (const [name, value] of Object.entries(manifest[section] ?? {})) {
         if (value.startsWith("workspace:") && selected.has(name)) {
@@ -39,31 +35,19 @@ export function duplicateWorkspaceDependencies(
     }
   }
 
-  return new Set(
-    [...counts].filter(([, count]) => count > 1).map(([name]) => name),
-  );
+  return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
 }
 
-export function graphEdgeTag(
-  dependencyTag: string,
-  parentName: string,
-): string {
+export function graphEdgeTag(dependencyTag: string, parentName: string): string {
   // Keep the readable basename short, but hash the full package name so
   // parents with the same basename in different npm scopes stay distinct.
   // Bun uses the tag in a package-store file name with a 255-byte limit.
   const parent = parentName.replace(/^@[^/]+\//, "");
-  const hash = createHash("sha256")
-    .update(parentName)
-    .digest("hex")
-    .slice(0, 8);
+  const hash = createHash("sha256").update(parentName).digest("hex").slice(0, 8);
   const identity = `${parent.slice(0, 80)}-${hash}`;
   return `${dependencyTag}-from-${identity}`;
 }
 
-export function graphUrl(
-  plan: PrPackagePlan,
-  install: string,
-  tag: string,
-): string {
+export function graphUrl(plan: PrPackagePlan, install: string, tag: string): string {
   return `https://${plan.install_host}/${install}/${encodeURIComponent(tag)}`;
 }

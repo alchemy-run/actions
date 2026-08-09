@@ -163,6 +163,7 @@ jobs:
 | `name`     | —                | npm package name (used for the workspace-dep graph)      |
 | `project`  | = `name`         | Project name in the pr-package upload URL                |
 | `install`  | = `project`      | Path used in the `bun add` URL on PR comments            |
+| `submodule` | `false`          | Resolve this package's commit from its Git submodule     |
 
 Top-level inputs include `pr-package-host` (upload target, default
 `pkg.ing`), `install-host` (CDN host for PR-comment URLs; defaults to
@@ -175,6 +176,10 @@ rewrites configured workspace dependencies to deterministic URLs for the same
 commit graph, uploads the complete dependency set, and only then exposes
 full/short commit, branch, and PR tags. It does not use package matrices,
 publish waves, workflow artifacts, or per-package runner overrides.
+
+Packages use the workflow event commit by default. Set `submodule: true` on a
+package inside a checked-out Git submodule to use that submodule's checked-out
+commit for dependency URLs and install commands.
 
 ## Required secrets (inherited from the caller)
 

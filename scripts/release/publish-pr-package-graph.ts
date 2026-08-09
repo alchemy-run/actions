@@ -5,18 +5,8 @@
  */
 import { readdirSync } from "node:fs";
 import { basename, join } from "node:path";
-import {
-  fail,
-  required,
-  type Package,
-  type PrPackagePlan,
-} from "./config.ts";
-import {
-  DEPENDENCY_SECTIONS,
-  graphEdgeTag,
-  graphUrl,
-  type Manifest,
-} from "./pr-package-graph.ts";
+import { fail, required, type Package, type PrPackagePlan } from "./config.ts";
+import { DEPENDENCY_SECTIONS, graphEdgeTag, graphUrl, type Manifest } from "./pr-package-graph.ts";
 
 function findTarball(artifactRoot: string, pkg: Package): string {
   const artifactDir = join(artifactRoot, pkg.artifact);
@@ -25,21 +15,16 @@ function findTarball(artifactRoot: string, pkg: Package): string {
     .map((file) => join(artifactDir, file));
 
   if (tarballs.length !== 1) {
-    fail(
-      `Expected one tarball for ${pkg.project}, found ${tarballs.length}`,
-    );
+    fail(`Expected one tarball for ${pkg.project}, found ${tarballs.length}`);
   }
   return tarballs[0]!;
 }
 
 function packedManifest(tarball: string): Manifest {
-  const result = Bun.spawnSync(
-    ["tar", "-xOf", tarball, "package/package.json"],
-    {
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
+  const result = Bun.spawnSync(["tar", "-xOf", tarball, "package/package.json"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   if (result.exitCode !== 0) {
     process.stderr.write(result.stderr);
     fail(`Failed to read package/package.json from ${tarball}`);
@@ -56,10 +41,7 @@ async function upload(
   tags: string[],
 ): Promise<void> {
   const file = Bun.file(tarball);
-  const projectPath = pkg.project
-    .split("/")
-    .map(encodeURIComponent)
-    .join("/");
+  const projectPath = pkg.project.split("/").map(encodeURIComponent).join("/");
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/gzip",
@@ -71,14 +53,11 @@ async function upload(
     `Publishing ${pkg.project} (${basename(tarball)}) ` +
       `with tags ${JSON.stringify(tags)} ttl=${ttl ?? "default"}`,
   );
-  const response = await fetch(
-    `https://${host}/projects/${projectPath}/packages`,
-    {
-      method: "PUT",
-      headers,
-      body: file,
-    },
-  );
+  const response = await fetch(`https://${host}/projects/${projectPath}/packages`, {
+    method: "PUT",
+    headers,
+    body: file,
+  });
   if (!response.ok) {
     const details = await response.text();
     fail(
@@ -99,9 +78,7 @@ const entries = plan.packages.map((pkg) => ({
   tarball: findTarball(artifactRoot, pkg),
 }));
 const byName = new Map(entries.map((entry) => [entry.pkg.name, entry]));
-const dependencyTags = new Map(
-  entries.map(({ pkg }) => [pkg.name, new Set([plan.dependency_tag])]),
-);
+const dependencyTags = new Map(entries.map(({ pkg }) => [pkg.name, new Set([pkg.dependency_tag])]));
 
 for (const { pkg, tarball } of entries) {
   const manifest = packedManifest(tarball);
@@ -109,7 +86,7 @@ for (const { pkg, tarball } of entries) {
     for (const [name, value] of Object.entries(manifest[section] ?? {})) {
       const dependency = byName.get(name)?.pkg;
       if (!dependency) continue;
-      const tag = graphEdgeTag(plan.dependency_tag, manifest.name ?? pkg.name);
+      const tag = graphEdgeTag(dependency.dependency_tag, manifest.name ?? pkg.name);
       if (value === graphUrl(plan, dependency.install, tag)) {
         dependencyTags.get(name)!.add(tag);
       }
@@ -119,12 +96,10 @@ for (const { pkg, tarball } of entries) {
 
 console.log("Publishing same-commit dependency graph");
 for (const { pkg, tarball } of entries) {
-  await upload(host, token, ttl, pkg, tarball, [
-    ...dependencyTags.get(pkg.name)!,
-  ]);
+  await upload(host, token, ttl, pkg, tarball, [...dependencyTags.get(pkg.name)!]);
 }
 
 console.log("Dependency graph complete; exposing public tags");
 for (const { pkg, tarball } of entries) {
-  await upload(host, token, ttl, pkg, tarball, plan.tags);
+  await upload(host, token, ttl, pkg, tarball, pkg.tags);
 }

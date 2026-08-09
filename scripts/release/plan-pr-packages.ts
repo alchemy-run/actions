@@ -1,31 +1,22 @@
 #!/usr/bin/env bun
 /**
- * Build the plan consumed by every PR-package job: selected packages, tags,
- * dependency tag, short SHA, and install host as one source of truth.
+ * Build the plan consumed by every PR-package step. Entries marked as
+ * submodules resolve commit-derived values from their package directory;
+ * every other entry uses the workflow event commit.
  */
 import { $ } from "bun";
 import { join } from "node:path";
-import {
-  fail,
-  jsonArray,
-  output,
-  required,
-  type Package,
-  type PrPackagePlan,
-} from "./config.ts";
+import { fail, jsonArray, output, required, type Package, type PrPackagePlan } from "./config.ts";
 
 type PackageInput = {
   dir: string;
   name: string;
   project?: string;
   install?: string;
+  submodule?: boolean;
 };
 
-async function planPackages(
-  packages: Package[],
-  event: string,
-  sha: string,
-): Promise<Package[]> {
+async function planPackages(packages: Package[], event: string, sha: string): Promise<Package[]> {
   if (event === "push" || process.env.FORCE_LABEL_PRESENT === "true") {
     console.log(
       event === "push"
@@ -37,9 +28,7 @@ async function planPackages(
 
   const base = required("BASE_SHA");
   console.log(`Diffing ${base}..${sha}`);
-  const diffResult = await $`git diff --name-only ${base} ${sha}`
-    .nothrow()
-    .quiet();
+  const diffResult = await $`git diff --name-only ${base} ${sha}`.nothrow().quiet();
   if (diffResult.exitCode !== 0) {
     process.stderr.write(diffResult.stderr);
     fail(`git diff failed with exit code ${diffResult.exitCode}`);
@@ -67,57 +56,63 @@ async function planPackages(
   const text = result.stdout.toString();
   console.log(`compute-changed result: ${text.trim()}`);
   const affected = JSON.parse(text) as { changed: { dir: string }[] };
-  return affected.changed.map(
-    ({ dir }) => packages.find((p) => p.dir === dir)!,
-  );
+  return affected.changed.map(({ dir }) => packages.find((p) => p.dir === dir)!);
 }
 
 const event = required("EVENT");
 const branch = required("BRANCH");
 const sha = required("SHA");
-const configured = jsonArray<PackageInput>(
-  "PACKAGES_JSON",
-  required("PACKAGES_JSON"),
-);
+const configured = jsonArray<PackageInput>("PACKAGES_JSON", required("PACKAGES_JSON"));
 if (
   !configured.every(
     (p) =>
       p &&
       typeof p === "object" &&
       typeof p.dir === "string" &&
-      typeof p.name === "string",
+      typeof p.name === "string" &&
+      (p.submodule === undefined || typeof p.submodule === "boolean"),
   )
 ) {
   fail("PACKAGES_JSON packages must have dir and name");
 }
 
-const packages: Package[] = configured.map((p) => {
-  // encodeURIComponent leaves !'()* bare; GitHub artifact names reject them.
-  const encoded = encodeURIComponent(p.dir).replace(
-    /[!'()*]/g,
-    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-  return {
-    dir: p.dir,
-    name: p.name,
-    project: p.project ?? p.name,
-    install: p.install ?? p.project ?? p.name,
-    artifact: `pr-package-${encoded}`,
-  };
-});
+const prTag = event === "pull_request" ? `pr-${required("PR_NUMBER")}` : undefined;
+const packages: Package[] = await Promise.all(
+  configured.map(async (p) => {
+    // encodeURIComponent leaves !'()* bare; GitHub artifact names reject them.
+    const encoded = encodeURIComponent(p.dir).replace(
+      /[!'()*]/g,
+      (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+    );
+    let commit = sha;
+    if (p.submodule) {
+      const commitResult = await $`git -C ${p.dir} rev-parse HEAD`.nothrow().quiet();
+      if (commitResult.exitCode !== 0) {
+        process.stderr.write(commitResult.stderr);
+        fail(`Could not resolve the commit owning ${p.dir}`);
+      }
+      commit = commitResult.stdout.toString().trim();
+    }
+    const short = commit.slice(0, 7);
+    return {
+      dir: p.dir,
+      name: p.name,
+      project: p.project ?? p.name,
+      install: p.install ?? p.project ?? p.name,
+      submodule: p.submodule ?? false,
+      artifact: `pr-package-${encoded}`,
+      commit,
+      short,
+      tags: [short, commit, branch, ...(prTag ? [prTag] : [])],
+      dependency_tag: `graph-${commit}`,
+    };
+  }),
+);
 const selected = await planPackages(packages, event, sha);
-
-const short = sha.slice(0, 7);
-const tags = [short, sha, branch];
-if (event === "pull_request") tags.push(`pr-${required("PR_NUMBER")}`);
 
 const plan: PrPackagePlan = {
   packages: selected,
   publishable_names: packages.map((p) => p.name),
-  tags,
-  dependency_tag: `graph-${sha}`,
-  short,
-  install_host:
-    process.env.INSTALL_HOST?.trim() || required("PR_PACKAGE_HOST"),
+  install_host: process.env.INSTALL_HOST?.trim() || required("PR_PACKAGE_HOST"),
 };
 output("plan", plan);

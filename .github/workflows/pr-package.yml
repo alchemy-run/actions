@@ -10,8 +10,9 @@ on:
       packages:
         description: >-
           JSON array of `{ "dir": "...", "name": "...", "project": "...",
-          "install": "..." }`. `dir` and `name` are required. `project`
-          defaults to `name`; `install` defaults to `project`.
+          "install": "...", "submodule": true }`. `dir` and `name` are
+          required. `project` defaults to `name`; `install` defaults to
+          `project`; `submodule` defaults to `false`.
         required: true
         type: string
       pr-package-host:
