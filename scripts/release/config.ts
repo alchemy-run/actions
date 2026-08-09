@@ -16,6 +16,7 @@ export type Package = {
   group?: string;
   project: string;
   install: string;
+  readme: string;
   submodule: boolean;
   artifact: string;
   commit: string;

@@ -5,7 +5,7 @@ inputs:
   packages:
     description: >-
       JSON array of package config. Each entry requires dir and name and may
-      include group, project, install, and submodule.
+      include group, project, install, readme, and submodule.
     required: true
   pr-package-token:
     description: Bearer token used to upload packages

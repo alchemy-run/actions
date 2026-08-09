@@ -199,6 +199,7 @@ jobs:
 | `group`    | `Packages`       | Heading used to group install commands in the PR comment |
 | `project`  | = `name`         | Project name in the pr-package upload URL                |
 | `install`  | = `project`      | Path used in generated package URLs                       |
+| `readme`   | `README.md`      | Repository-relative README injected into the tarball     |
 | `submodule` | `false`          | Resolve this package's commit from its Git submodule     |
 
 Action inputs include `pr-package-host` (upload target, default `pkg.ing`),

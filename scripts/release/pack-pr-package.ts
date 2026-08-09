@@ -85,6 +85,8 @@ if (!dir) fail("Usage: pack-pr-package.ts <package-dir>");
 
 const plan = JSON.parse(required("PLAN")) as PrPackagePlan;
 const cwd = resolve(process.cwd(), dir);
+const pkg = plan.packages.find((entry) => entry.dir === dir);
+if (!pkg) fail(`Package ${dir} is missing from the plan`);
 
 for (const file of readdirSync(cwd).filter((f) => f.endsWith(".tgz"))) {
   unlinkSync(resolve(cwd, file));
@@ -108,7 +110,7 @@ try {
     fail(`Could not extract ${tarballs[0]}`);
   }
 
-  const readme = resolve("README.md");
+  const readme = resolve(pkg.readme);
   if (existsSync(readme)) {
     copyFileSync(readme, join(extracted, "package", "README.md"));
   }

@@ -25,6 +25,7 @@ describe("content-addressed PR package publishing", () => {
       name: "@scope/example",
       project: "@scope/example",
       install: "@scope/example",
+      readme: "README.md",
       submodule: false,
       artifact: "artifact",
       commit: "a".repeat(40),
