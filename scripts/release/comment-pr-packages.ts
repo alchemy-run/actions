@@ -49,7 +49,7 @@ const body = [
   "| --- | --- |",
   ...plan.packages.map(
     ({ name, install, short }) =>
-      `| \`${name}\` | \`bun add ${name}@https://${plan.install_host}/${install}/${short}\` |`,
+      `| \`${name}\` | \`bun add https://${plan.install_host}/${install}/${short}\` |`,
   ),
 ].join("\n");
 
