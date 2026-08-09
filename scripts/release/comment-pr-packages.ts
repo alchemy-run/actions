@@ -45,13 +45,12 @@ const body = [
   "",
   "Install the packages built from this commit:",
   "",
-  ...plan.packages.flatMap(({ name, install, short }) => [
-    `**${name}**`,
-    "```sh",
-    `bun add ${name}@https://${plan.install_host}/${install}/${short}`,
-    "```",
-    "",
-  ]),
+  "| Package | Install |",
+  "| --- | --- |",
+  ...plan.packages.map(
+    ({ name, install, short }) =>
+      `| \`${name}\` | \`bun add ${name}@https://${plan.install_host}/${install}/${short}\` |`,
+  ),
 ].join("\n");
 
 let existing: GitHubComment | undefined;
