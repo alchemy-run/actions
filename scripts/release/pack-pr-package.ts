@@ -19,7 +19,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { fail, required, type Package, type PrPackagePlan } from "./config.ts";
+import { fail, required } from "./config.ts";
+import type { Package, PrPackagePlan } from "./pr-package-config.ts";
 import { DEPENDENCY_SECTIONS, packageUrl, type Manifest } from "./pr-package-manifest.ts";
 
 function rewriteDependencies(plan: PrPackagePlan, dir: string, manifestPath: string): void {

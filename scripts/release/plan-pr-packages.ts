@@ -6,7 +6,8 @@
  */
 import { $ } from "bun";
 import { join } from "node:path";
-import { fail, jsonArray, output, required, type Package, type PrPackagePlan } from "./config.ts";
+import { fail, jsonArray, output, required } from "./config.ts";
+import type { Package, PrPackagePlan } from "./pr-package-config.ts";
 
 type PackageInput = {
   dir: string;

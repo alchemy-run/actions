@@ -1,4 +1,4 @@
-import type { PrPackagePlan } from "./config.ts";
+import type { PrPackagePlan } from "./pr-package-config.ts";
 
 export function renderPackageTables(plan: PrPackagePlan): string {
   const groups = new Map<string, typeof plan.packages>();

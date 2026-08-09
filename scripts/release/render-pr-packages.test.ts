@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { PrPackagePlan } from "./config.ts";
+import type { PrPackagePlan } from "./pr-package-config.ts";
 import { renderPackageTables } from "./render-pr-packages.ts";
 
 describe("PR package tables", () => {

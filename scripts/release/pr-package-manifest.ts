@@ -1,4 +1,4 @@
-import type { PrPackagePlan } from "./config.ts";
+import type { PrPackagePlan } from "./pr-package-config.ts";
 
 export type Manifest = {
   name?: string;

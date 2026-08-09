@@ -3,7 +3,8 @@
  * Create or update the sticky pull request comment with install commands for
  * every package in the plan.
  */
-import { fail, required, type PrPackagePlan } from "./config.ts";
+import { fail, required } from "./config.ts";
+import type { PrPackagePlan } from "./pr-package-config.ts";
 import { renderPackageTables } from "./render-pr-packages.ts";
 
 type GitHubComment = {

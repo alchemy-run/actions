@@ -2,7 +2,8 @@
 /** Pack and collect every selected PR package from an already-built workspace. */
 import { mkdirSync, readdirSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { fail, required, type PrPackagePlan } from "./config.ts";
+import { fail, required } from "./config.ts";
+import type { PrPackagePlan } from "./pr-package-config.ts";
 
 async function run(command: string[]): Promise<void> {
   const child = Bun.spawn(command, {

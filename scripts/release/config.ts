@@ -13,20 +13,18 @@ import { appendFileSync } from "node:fs";
 export type Package = {
   dir: string;
   name: string;
-  group?: string;
   project: string;
   install: string;
-  readme?: string;
-  submodule: boolean;
+  runner: string;
   artifact: string;
-  commit: string;
-  short: string;
-  tags: string[];
 };
 
 export type PrPackagePlan = {
   packages: Package[];
   publishable_names: string[];
+  tags: string[];
+  dependency_tag: string;
+  short: string;
   install_host: string;
 };
 
@@ -70,11 +68,17 @@ function parseJsonArray(name: string, value: string): string[] {
 }
 
 export function publishableDirs(): string[] {
-  return parseJsonArray("ALCHEMY_PUBLISHABLE_DIRS", required("ALCHEMY_PUBLISHABLE_DIRS"));
+  return parseJsonArray(
+    "ALCHEMY_PUBLISHABLE_DIRS",
+    required("ALCHEMY_PUBLISHABLE_DIRS"),
+  );
 }
 
 export function publishableNames(): string[] {
-  return parseJsonArray("ALCHEMY_PUBLISHABLE_NAMES", required("ALCHEMY_PUBLISHABLE_NAMES"));
+  return parseJsonArray(
+    "ALCHEMY_PUBLISHABLE_NAMES",
+    required("ALCHEMY_PUBLISHABLE_NAMES"),
+  );
 }
 
 export function currentVersion(): string {

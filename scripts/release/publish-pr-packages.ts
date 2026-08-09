@@ -7,7 +7,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { fail, required, type Package, type PrPackagePlan } from "./config.ts";
+import { fail, required } from "./config.ts";
+import type { Package, PrPackagePlan } from "./pr-package-config.ts";
 
 function findTarball(artifactRoot: string, pkg: Package): string {
   const artifactDir = join(artifactRoot, pkg.artifact);

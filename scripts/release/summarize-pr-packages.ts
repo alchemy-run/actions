@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { appendFileSync } from "node:fs";
-import { required, type PrPackagePlan } from "./config.ts";
+import { required } from "./config.ts";
+import type { PrPackagePlan } from "./pr-package-config.ts";
 import { renderPackageTables } from "./render-pr-packages.ts";
 
 const plan = JSON.parse(required("PLAN")) as PrPackagePlan;
