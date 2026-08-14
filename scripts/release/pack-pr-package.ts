@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
 /**
- * Pack with Bun, then rewrite selected dependencies in the resulting manifest
- * to same-commit PR-package URLs and repack the verified tarball.
+ * Pack with the repository's package manager, then rewrite selected dependencies
+ * in the resulting manifest to same-commit PR-package URLs and repack the
+ * verified tarball.
  */
 import { $ } from "bun";
 import {
+  existsSync,
   lstatSync,
   lutimesSync,
   mkdtempSync,
@@ -81,9 +83,14 @@ for (const file of readdirSync(cwd).filter((f) => f.endsWith(".tgz"))) {
   unlinkSync(resolve(cwd, file));
 }
 
-const result = await $.cwd(cwd)`bun pm pack --destination .`.nothrow();
+const usesPnpm = existsSync(resolve(process.cwd(), "pnpm-lock.yaml"));
+const result = usesPnpm
+  ? await $.cwd(cwd)`pnpm pack --pack-destination .`.nothrow()
+  : await $.cwd(cwd)`bun pm pack --destination .`.nothrow();
 if (result.exitCode !== 0) {
-  fail(`bun pm pack failed with exit code ${result.exitCode}`);
+  fail(
+    `${usesPnpm ? "pnpm pack" : "bun pm pack"} failed with exit code ${result.exitCode}`,
+  );
 }
 
 let tarballs = readdirSync(cwd).filter((f) => f.endsWith(".tgz"));

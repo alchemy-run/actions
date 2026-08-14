@@ -7,8 +7,8 @@
  *   publishable siblings resolve to the (freshly bumped) version in their
  *   package.json; other workspace members (e.g. submodule packages like
  *   @distilled.cloud/*) resolve to the installed member's version via
- *   node_modules. `bun pm pack`'s own substitution resolves `workspace:*`
- *   via bun.lock, which can lag behind a fresh version bump.
+ *   node_modules. The package manager's own substitution of `workspace:*` can
+ *   use a lockfile that lags behind a fresh version bump.
  * - Selects the npm dist-tag based on the release channel:
  *     release → latest
  *     beta|alpha|rc → next
@@ -222,7 +222,11 @@ if (rewrote) {
 }
 
 const $pkg = $.cwd(packageDir);
-await $pkg`bun pm pack --destination .`;
+if (existsSync(join(repoRoot, "pnpm-lock.yaml"))) {
+  await $pkg`pnpm pack --pack-destination .`;
+} else {
+  await $pkg`bun pm pack --destination .`;
+}
 
 const tarballs = readdirSync(packageDir).filter((f) => f.endsWith(".tgz"));
 if (tarballs.length !== 1) {
