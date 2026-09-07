@@ -91,6 +91,7 @@ export async function pointTags(
   pkg: Package,
   archive: Tarball,
   tags: string[],
+  pullRequest?: string,
 ): Promise<void> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
@@ -98,10 +99,12 @@ export async function pointTags(
     "Alchemy-Tarball-Hash": archive.hash,
   };
   if (ttl) headers["Alchemy-TTL"] = ttl;
+  if (pullRequest) headers["Alchemy-Pull-Request"] = pullRequest;
 
   console.log(
     `Pointing ${pkg.project} tags ${JSON.stringify(tags)} at ` +
-      `${archive.hash.slice(0, 12)} ttl=${ttl ?? "default"}`,
+      `${archive.hash.slice(0, 12)} ttl=${ttl ?? "default"}` +
+      (pullRequest ? ` pr=${pullRequest}` : ""),
   );
   const response = await fetch(`${projectUrl(host, pkg.project)}/tags`, {
     method: "PUT",
@@ -121,6 +124,7 @@ export async function publishPrPackages(options: {
   host: string;
   token: string;
   ttl?: string;
+  pullRequest?: string;
   artifactRoot: string;
 }): Promise<void> {
   const entries = options.plan.packages.map((pkg) => ({
@@ -136,7 +140,15 @@ export async function publishPrPackages(options: {
   console.log("Pointing dependency commits");
   await Promise.all(
     entries.map(({ pkg, tarball }) =>
-      pointTags(options.host, options.token, options.ttl, pkg, tarball, [pkg.commit]),
+      pointTags(
+        options.host,
+        options.token,
+        options.ttl,
+        pkg,
+        tarball,
+        [pkg.commit],
+        options.pullRequest,
+      ),
     ),
   );
 
@@ -150,6 +162,7 @@ export async function publishPrPackages(options: {
         pkg,
         tarball,
         pkg.tags.filter((tag) => tag !== pkg.commit),
+        options.pullRequest,
       ),
     ),
   );
@@ -161,6 +174,7 @@ if (import.meta.main) {
     host: required("PR_PACKAGE_HOST"),
     token: required("TOKEN"),
     ttl: process.env.TTL?.trim() || undefined,
+    pullRequest: process.env.PULL_REQUEST?.trim() || undefined,
     artifactRoot: process.env.ARTIFACT_ROOT?.trim() || ".pr-packages",
   });
 }
