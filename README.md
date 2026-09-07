@@ -133,9 +133,10 @@ everything; touching `bun.lock`, root `package.json`, or the consumer workflow
 also republishes everything. The caller may build a wider set before invoking
 the action.
 
-**PR close is a no-op.** Tags persist past PR close so install URLs
-keep resolving long-term — the pkg.ing bucket's TTL handles orphan
-cleanup on its own schedule.
+On `pull_request` events the action sends `Alchemy-Pull-Request:
+owner/repo#n` with the tags so pkg.ing can renew TTL while the PR is
+open. Teardown (delete preview tags + comment) is the consumer
+workflow's job on `closed` — this action does not run on close.
 
 ```yaml
 # consumer .github/workflows/pr-package.yml

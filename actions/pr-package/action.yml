@@ -73,6 +73,7 @@ runs:
         PR_PACKAGE_HOST: ${{ inputs.pr-package-host }}
         TOKEN: ${{ inputs.pr-package-token }}
         TTL: ${{ github.event_name == 'pull_request' && inputs.pr-ttl || '' }}
+        PULL_REQUEST: ${{ github.event_name == 'pull_request' && format('{0}#{1}', github.repository, github.event.pull_request.number) || '' }}
       run: bun "$ACTIONS_DIR/scripts/release/publish-pr-packages.ts"
 
     - name: Add package URLs to run summary

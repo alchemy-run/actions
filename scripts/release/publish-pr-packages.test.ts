@@ -123,4 +123,54 @@ describe("content-addressed PR package publishing", () => {
     expect(requests.at(-1)?.headers.get("alchemy-ttl")).toBe("1 week");
     expect(requests.at(-1)?.headers.has("alchemy-tarball-size")).toBe(false);
   });
+
+  test("sends Alchemy-Pull-Request on every tag pointer for a PR publish", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pr-package-publish-test-"));
+    temporaryDirectories.push(dir);
+    const artifact = join(dir, "artifact");
+    mkdirSync(artifact);
+    await Bun.write(join(artifact, "package.tgz"), "stable tarball bytes");
+    const commit = "a".repeat(40);
+    const pkg: Package = {
+      dir: "packages/example",
+      name: "@scope/example",
+      project: "@scope/example",
+      install: "@scope/example",
+      submodule: false,
+      artifact: "artifact",
+      commit,
+      short: "aaaaaaa",
+      tags: ["aaaaaaa", commit, "feature", "pr-1"],
+    };
+
+    const pullRequests: Array<string | null> = [];
+    globalThis.fetch = ((input, init) => {
+      const request = new Request(input, init);
+      if (request.method === "HEAD") {
+        return Promise.resolve(new Response(null, { status: 404 }));
+      }
+      if (request.url.endsWith("/tags")) {
+        pullRequests.push(request.headers.get("alchemy-pull-request"));
+      }
+      return Promise.resolve(Response.json({ ok: true }));
+    }) as typeof fetch;
+
+    await publishPrPackages({
+      plan: {
+        packages: [pkg],
+        publishable_names: [pkg.name],
+        install_host: "pkg.example.com",
+      },
+      host: "pkg.example.com",
+      token: "secret",
+      ttl: "1 week",
+      pullRequest: "alchemy-run/alchemy#1",
+      artifactRoot: dir,
+    });
+
+    expect(pullRequests).toEqual([
+      "alchemy-run/alchemy#1",
+      "alchemy-run/alchemy#1",
+    ]);
+  });
 });
